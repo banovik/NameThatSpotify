@@ -1,0 +1,40 @@
+import React, { useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import LandingPage from './components/LandingPage';
+import AdminPage from './components/AdminPage';
+import PlayerPage from './components/PlayerPage';
+
+// Component to handle URL parameters and redirects
+function AppContent() {
+  const location = useLocation();
+
+  useEffect(() => {
+    // Check for error parameter in URL
+    const urlParams = new URLSearchParams(location.search);
+    const error = urlParams.get('error');
+    
+    if (error === 'auth_failed') {
+      alert('Spotify authentication failed. Please try again.');
+    }
+  }, [location]);
+
+  return (
+    <Routes>
+      <Route path="/" element={<LandingPage />} />
+      <Route path="/admin" element={<AdminPage />} />
+      <Route path="/player" element={<PlayerPage />} />
+    </Routes>
+  );
+}
+
+function App() {
+  return (
+    <Router>
+      <div className="App">
+        <AppContent />
+      </div>
+    </Router>
+  );
+}
+
+export default App; 
