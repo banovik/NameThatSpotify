@@ -3,6 +3,8 @@ import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-route
 import LandingPage from './components/LandingPage';
 import AdminPage from './components/AdminPage';
 import PlayerPage from './components/PlayerPage';
+import ProtectedRoute from './components/ProtectedRoute';
+import { AuthProvider } from './contexts/AuthContext';
 
 // Component to handle URL parameters and redirects
 function AppContent() {
@@ -21,7 +23,11 @@ function AppContent() {
   return (
     <Routes>
       <Route path="/" element={<LandingPage />} />
-      <Route path="/admin" element={<AdminPage />} />
+      <Route path="/admin" element={
+        <ProtectedRoute>
+          <AdminPage />
+        </ProtectedRoute>
+      } />
       <Route path="/player" element={<PlayerPage />} />
     </Routes>
   );
@@ -29,11 +35,13 @@ function AppContent() {
 
 function App() {
   return (
-    <Router>
-      <div className="App">
-        <AppContent />
-      </div>
-    </Router>
+    <AuthProvider>
+      <Router>
+        <div className="App">
+          <AppContent />
+        </div>
+      </Router>
+    </AuthProvider>
   );
 }
 

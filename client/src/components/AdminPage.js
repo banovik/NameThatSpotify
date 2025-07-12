@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import io from 'socket.io-client';
+import { useAuth } from '../contexts/AuthContext';
 
 const AdminPage = () => {
   const navigate = useNavigate();
+  const { logoutAdmin } = useAuth();
   const [socket, setSocket] = useState(null);
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [playlist, setPlaylist] = useState(null);
@@ -18,16 +20,22 @@ const AdminPage = () => {
   const [devices, setDevices] = useState([]);
   const [showDevices, setShowDevices] = useState(false);
   const [guessedParts, setGuessedParts] = useState({ artist: false, title: false, lyrics: false });
+  const [playbackPosition, setPlaybackPosition] = useState(0);
+  const [playbackDuration, setPlaybackDuration] = useState(0);
+  const [isPlaybackActive, setIsPlaybackActive] = useState(false);
 
   useEffect(() => {
     // Check if user is authenticated
     const checkAuthStatus = async () => {
       try {
-        // This would check if the user has a valid Spotify token
-        // For now, we'll assume they're authenticated if they reach this page
+        // Check if we have a valid Spotify token
+        const response = await axios.get('/api/devices');
+        // If this succeeds, we have a valid token
+        console.log('Spotify authentication verified');
       } catch (error) {
-        console.error('Auth check failed:', error);
-        navigate('/');
+        console.error('Spotify auth check failed:', error);
+        // Don't redirect, just show that Spotify needs to be authenticated
+        setError('Please authenticate with Spotify to use admin features');
       }
     };
 
@@ -90,6 +98,29 @@ const AdminPage = () => {
     };
   }, [navigate]);
 
+  // Update playback position periodically when playing
+  useEffect(() => {
+    let interval;
+    if (currentTrack) {
+      // Get initial position
+      getPlaybackPosition();
+      
+      // Update position every second when playing
+      if (isPlaying) {
+        interval = setInterval(getPlaybackPosition, 1000);
+      }
+    } else {
+      setPlaybackPosition(0);
+      setPlaybackDuration(0);
+    }
+
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+  }, [isPlaying, currentTrack]);
+
   const checkDevices = async () => {
     try {
       const response = await axios.get('/api/devices');
@@ -98,6 +129,16 @@ const AdminPage = () => {
     } catch (error) {
       console.error('Error checking devices:', error);
       setError('Failed to check Spotify devices');
+    }
+  };
+
+  const authenticateSpotify = async () => {
+    try {
+      const response = await axios.get('/auth/spotify');
+      window.location.href = response.data.url;
+    } catch (error) {
+      console.error('Error initiating Spotify auth:', error);
+      setError('Failed to connect to Spotify');
     }
   };
 
@@ -142,6 +183,25 @@ const AdminPage = () => {
     }
   };
 
+  const resumePlayback = async () => {
+    try {
+      await axios.post('/api/resume');
+      setIsPlaying(true);
+      setError('');
+    } catch (error) {
+      setError('Failed to resume playback.');
+      console.error('Resume error:', error);
+    }
+  };
+
+  const togglePlayback = async () => {
+    if (isPlaying) {
+      await pausePlayback();
+    } else {
+      await resumePlayback();
+    }
+  };
+
   const resetScores = async () => {
     try {
       await axios.post('/api/reset-scores');
@@ -161,13 +221,84 @@ const AdminPage = () => {
     setPlaylistUrl('');
   };
 
+  const handleLogout = () => {
+    logoutAdmin();
+    navigate('/');
+  };
+
+  // Get current playback position
+  const getPlaybackPosition = async () => {
+    try {
+      const response = await axios.get('/api/playback-position');
+      if (response.data.success) {
+        setPlaybackPosition(response.data.position);
+        setPlaybackDuration(response.data.duration);
+        setIsPlaybackActive(response.data.isPlaying);
+      }
+    } catch (error) {
+      console.error('Error getting playback position:', error);
+    }
+  };
+
+  // Seek to position in song
+  const seekToPosition = async (positionMs) => {
+    try {
+      await axios.post('/api/seek', { positionMs });
+      setPlaybackPosition(positionMs);
+    } catch (error) {
+      console.error('Error seeking to position:', error);
+      setError('Failed to seek to position');
+    }
+  };
+
+  // Handle progress bar click
+  const handleProgressClick = (event) => {
+    if (!playbackDuration) return;
+    
+    const progressBar = event.currentTarget;
+    const rect = progressBar.getBoundingClientRect();
+    const clickX = event.clientX - rect.left;
+    const percentage = clickX / rect.width;
+    const newPosition = Math.floor(percentage * playbackDuration);
+    
+    seekToPosition(newPosition);
+  };
+
+  // Format time in MM:SS
+  const formatTime = (ms) => {
+    if (!ms) return '0:00';
+    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.floor((ms % 60000) / 1000);
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
   return (
     <div className="container">
-      <h1 className="title">🎮 Admin Panel</h1>
+      <div className="admin-header">
+        <h1 className="title">🎮 Admin Panel</h1>
+        <button className="btn btn-danger" onClick={handleLogout}>
+          Logout
+        </button>
+      </div>
       
       {error && (
         <div className="card" style={{ background: '#ffe6e6', border: '1px solid #ff9999' }}>
           <p style={{ color: '#cc0000' }}>{error}</p>
+        </div>
+      )}
+
+      {/* Spotify Authentication */}
+      {error && error.includes('authenticate with Spotify') && (
+        <div className="card">
+          <h2 className="subtitle">🎵 Spotify Authentication Required</h2>
+          <p className="text-center mb-20">
+            You need to authenticate with Spotify to use admin features.
+          </p>
+          <div className="flex-center">
+            <button className="btn" onClick={authenticateSpotify}>
+              Connect Spotify Account
+            </button>
+          </div>
         </div>
       )}
 
@@ -285,13 +416,29 @@ const AdminPage = () => {
               </div>
             </div>
             
+            {/* Progress Bar */}
+            {currentTrack && playbackDuration > 0 && (
+              <div className="progress-bar-container mt-20">
+                <div className="progress-bar" onClick={handleProgressClick}>
+                  <div 
+                    className="progress-fill" 
+                    style={{ width: `${(playbackPosition / playbackDuration) * 100}%` }}
+                  ></div>
+                </div>
+                <div className="progress-time">
+                  <span>{formatTime(playbackPosition)}</span>
+                  <span>{formatTime(playbackDuration)}</span>
+                </div>
+              </div>
+            )}
+            
             <div className="flex-center mt-20">
               <button 
-                className="btn btn-danger" 
-                onClick={pausePlayback}
-                disabled={!isPlaying}
+                className={`btn ${isPlaying ? 'btn-danger' : 'btn'}`}
+                onClick={togglePlayback}
+                disabled={!currentTrack}
               >
-                Pause
+                {isPlaying ? '⏸️ Pause' : '▶️ Play'}
               </button>
             </div>
           </div>

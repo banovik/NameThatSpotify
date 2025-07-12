@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
 
@@ -17,6 +17,12 @@ const PlayerPage = () => {
   const [canGuess, setCanGuess] = useState(true);
   const [lyricsLetterCount, setLyricsLetterCount] = useState(0);
   const [guessedParts, setGuessedParts] = useState({ artist: false, title: false, lyrics: false });
+  const [activeInput, setActiveInput] = useState('title'); // Track which input should be focused
+  
+  // Refs for input elements
+  const titleInputRef = useRef(null);
+  const artistInputRef = useRef(null);
+  const lyricsInputRef = useRef(null);
 
   useEffect(() => {
     // Get player name from navigation state
@@ -73,6 +79,11 @@ const PlayerPage = () => {
       setMessage('Playback paused by admin', 'info');
     });
 
+    newSocket.on('playbackResumed', () => {
+      setIsPlaying(true);
+      setMessage('Playback resumed by admin', 'info');
+    });
+
     newSocket.on('playerJoined', (data) => {
       setPlayers(data.players || {});
       setScores(data.scores || {});
@@ -125,10 +136,49 @@ const PlayerPage = () => {
     };
   }, [location.state, navigate]);
 
+  // Determine which input should be active based on guessed parts
+  useEffect(() => {
+    if (!guessedParts.title) {
+      setActiveInput('title');
+    } else if (!guessedParts.artist) {
+      setActiveInput('artist');
+    } else if (!guessedParts.lyrics) {
+      setActiveInput('lyrics');
+    }
+  }, [guessedParts]);
+
+  // Focus the active input when it changes
+  useEffect(() => {
+    if (canGuess && currentSong) {
+      const focusInput = () => {
+        switch (activeInput) {
+          case 'title':
+            if (titleInputRef.current && !guessedParts.title) {
+              titleInputRef.current.focus();
+            }
+            break;
+          case 'artist':
+            if (artistInputRef.current && !guessedParts.artist) {
+              artistInputRef.current.focus();
+            }
+            break;
+          case 'lyrics':
+            if (lyricsInputRef.current && !guessedParts.lyrics) {
+              lyricsInputRef.current.focus();
+            }
+            break;
+        }
+      };
+      
+      // Small delay to ensure the input is rendered
+      setTimeout(focusInput, 100);
+    }
+  }, [activeInput, canGuess, currentSong, guessedParts]);
+
   const handleGuessSubmit = (e) => {
     e.preventDefault();
     
-    if (!canGuess || !isPlaying) {
+    if (!canGuess || !currentSong) {
       setMessage('Cannot guess right now!', 'error');
       return;
     }
@@ -177,19 +227,19 @@ const PlayerPage = () => {
       )}
 
       {/* Guessing Form */}
-      {isPlaying && (
+      {currentSong && (
         <div className="card">
           <h2 className="subtitle">🎯 Make Your Guess</h2>
           
           {/* Progress Indicator */}
           <div className="progress-indicator mb-20">
             <div className="progress-item">
-              <span className={`progress-dot ${guessedParts.artist ? 'guessed' : ''}`}>🎤</span>
-              <span className="progress-label">Artist {guessedParts.artist ? '✓' : ''}</span>
-            </div>
-            <div className="progress-item">
               <span className={`progress-dot ${guessedParts.title ? 'guessed' : ''}`}>🎵</span>
               <span className="progress-label">Title {guessedParts.title ? '✓' : ''}</span>
+            </div>
+            <div className="progress-item">
+              <span className={`progress-dot ${guessedParts.artist ? 'guessed' : ''}`}>🎤</span>
+              <span className="progress-label">Artist {guessedParts.artist ? '✓' : ''}</span>
             </div>
             <div className="progress-item">
               <span className={`progress-dot ${guessedParts.lyrics ? 'guessed' : ''}`}>📝</span>
@@ -201,14 +251,7 @@ const PlayerPage = () => {
             <form onSubmit={handleGuessSubmit} className="guess-form">
               <div className="guess-input">
                 <input
-                  type="text"
-                  className={`input ${guessedParts.artist ? 'disabled' : ''}`}
-                  placeholder={guessedParts.artist ? "Artist already guessed ✓" : "Artist name"}
-                  value={guess.artist}
-                  onChange={(e) => handleInputChange('artist', e.target.value)}
-                  disabled={guessedParts.artist}
-                />
-                <input
+                  ref={titleInputRef}
                   type="text"
                   className={`input ${guessedParts.title ? 'disabled' : ''}`}
                   placeholder={guessedParts.title ? "Title already guessed ✓" : "Song title"}
@@ -216,8 +259,18 @@ const PlayerPage = () => {
                   onChange={(e) => handleInputChange('title', e.target.value)}
                   disabled={guessedParts.title}
                 />
+                <input
+                  ref={artistInputRef}
+                  type="text"
+                  className={`input ${guessedParts.artist ? 'disabled' : ''}`}
+                  placeholder={guessedParts.artist ? "Artist already guessed ✓" : "Artist name"}
+                  value={guess.artist}
+                  onChange={(e) => handleInputChange('artist', e.target.value)}
+                  disabled={guessedParts.artist}
+                />
                 <div className="lyrics-input-container">
                   <input
+                    ref={lyricsInputRef}
                     type="text"
                     className={`input ${guessedParts.lyrics ? 'disabled' : ''} ${lyricsLetterCount > 0 && lyricsLetterCount < 12 ? 'input-warning' : ''}`}
                     placeholder={guessedParts.lyrics ? "Lyrics already guessed ✓" : "Lyrics (min 12 letters)"}
@@ -247,7 +300,7 @@ const PlayerPage = () => {
           <p className="text-center" style={{ fontSize: '0.9rem', color: '#666' }}>
             {canGuess 
               ? "Guess the artist, song title, or lyrics! Special characters are ignored in all guesses. Lyrics must be at least 12 letters. Each correct guess earns 1 point."
-              : "Round complete! Wait for the next song to start guessing again."
+              : "All parts of this song have been guessed! Wait for the next song to start guessing again."
             }
           </p>
         </div>
@@ -258,28 +311,17 @@ const PlayerPage = () => {
         <div className="card">
           <h2 className="subtitle">🎵 Now Playing</h2>
           <div className="now-playing">
-            <h3>???</h3>
-            <p>by ???</p>
-            <p>Album: ???</p>
-            <div className="flex-center mt-20">
-              <span className="score">Your Score: {myScore}</span>
-            </div>
+            <h3>{guessedParts.title ? currentSong.name : '???'}</h3>
+            <p>by {guessedParts.artist ? currentSong.artists.join(', ') : '???'}</p>
           </div>
         </div>
       )}
 
       {/* Game Status */}
-      {!isPlaying && (
+      {!currentSong && (
         <div className="card">
           <h2 className="subtitle">⏸️ Game Status</h2>
           <p className="text-center">Waiting for admin to start playing music...</p>
-        </div>
-      )}
-
-      {!canGuess && isPlaying && (
-        <div className="card">
-          <h2 className="subtitle">🎉 Round Complete!</h2>
-          <p className="text-center">Someone guessed correctly! Wait for the next song.</p>
         </div>
       )}
 
@@ -312,9 +354,9 @@ const PlayerPage = () => {
         <h2 className="subtitle">📖 How to Play</h2>
         <ul>
           <li>Listen to the music being played by the admin</li>
-          <li>Guess the artist, song title, or any lyrics</li>
-          <li>Artist names: Special characters are ignored</li>
+          <li>Guess the song title, artist, and any lyrics</li>
           <li>Song titles: Parentheses and special characters are ignored</li>
+          <li>Artist names: Special characters are ignored</li>
           <li>Lyrics guesses must be at least 12 letters long</li>
           <li>Punctuation and special characters are ignored in lyrics</li>
           <li>You only need to get one correct to earn a point</li>

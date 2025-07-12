@@ -324,6 +324,22 @@ app.post('/api/pause', async (req, res) => {
   }
 });
 
+app.post('/api/resume', async (req, res) => {
+  if (!gameState.accessToken) {
+    return res.status(401).json({ error: 'Not authenticated with Spotify' });
+  }
+  
+  try {
+    await spotifyApi.play();
+    gameState.isPlaying = true;
+    io.emit('playbackResumed');
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error resuming playback:', error);
+    res.status(500).json({ error: 'Failed to resume playback' });
+  }
+});
+
 app.post('/api/reset-scores', (req, res) => {
   gameState.scores = {};
   io.emit('scoresReset');
@@ -342,6 +358,52 @@ app.get('/api/devices', async (req, res) => {
   } catch (error) {
     console.error('Error getting devices:', error);
     res.status(500).json({ error: 'Failed to get devices' });
+  }
+});
+
+// Get current playback position
+app.get('/api/playback-position', async (req, res) => {
+  if (!gameState.accessToken) {
+    return res.status(401).json({ error: 'Not authenticated with Spotify' });
+  }
+  
+  try {
+    const playback = await spotifyApi.getMyCurrentPlaybackState();
+    if (playback.body && playback.body.is_playing) {
+      res.json({ 
+        success: true, 
+        position: playback.body.progress_ms,
+        duration: playback.body.item?.duration_ms || 0,
+        isPlaying: playback.body.is_playing
+      });
+    } else {
+      res.json({ 
+        success: true, 
+        position: 0,
+        duration: 0,
+        isPlaying: false
+      });
+    }
+  } catch (error) {
+    console.error('Error getting playback position:', error);
+    res.status(500).json({ error: 'Failed to get playback position' });
+  }
+});
+
+// Seek to position in song
+app.post('/api/seek', async (req, res) => {
+  const { positionMs } = req.body;
+  
+  if (!gameState.accessToken) {
+    return res.status(401).json({ error: 'Not authenticated with Spotify' });
+  }
+  
+  try {
+    await spotifyApi.seek(positionMs);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error seeking to position:', error);
+    res.status(500).json({ error: 'Failed to seek to position' });
   }
 });
 

@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { useAuth } from '../contexts/AuthContext';
 
 const LandingPage = () => {
   const navigate = useNavigate();
+  const { loginAdmin } = useAuth();
   const [playerName, setPlayerName] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -25,10 +27,10 @@ const LandingPage = () => {
       });
       
       if (verifyResponse.data.success) {
-        // Password is correct, proceed with Spotify auth
-        const response = await axios.get('/auth/spotify');
-        // Redirect to Spotify's authorization page
-        window.location.href = response.data.url;
+        // Password is correct, set admin as authenticated
+        loginAdmin();
+        // Navigate directly to admin page
+        navigate('/admin');
       }
     } catch (error) {
       console.error('Error during admin login:', error);
