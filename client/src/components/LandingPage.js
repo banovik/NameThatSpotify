@@ -53,10 +53,10 @@ const LandingPage = () => {
 
   return (
     <div className="container">
-      <h1 className="title">🎵 Spotify Music Game 🎵</h1>
+      <h1 className="title">Name That Spotify Tune</h1>
       
       <div className="card">
-        <h2 className="subtitle text-center">Welcome to the Music Guessing Game!</h2>
+        <h2 className="subtitle text-center">Welcome to this incredible vibecoded mess of a trivia game!</h2>
         <p className="text-center mb-20">
           Test your music knowledge by guessing songs, artists, and lyrics while competing with other players!
         </p>
@@ -64,7 +64,7 @@ const LandingPage = () => {
         <div className="grid">
           {/* Admin Section */}
           <div className="card">
-            <h3 className="subtitle text-center">🎮 Admin Panel</h3>
+            <h3 className="subtitle text-center">Admin Panel</h3>
             <p className="text-center mb-20">
               Control the game, manage playlists, and track player scores.
             </p>
@@ -92,7 +92,7 @@ const LandingPage = () => {
 
           {/* Player Section */}
           <div className="card">
-            <h3 className="subtitle text-center">🎯 Join as Player</h3>
+            <h3 className="subtitle text-center">Join as Player</h3>
             <p className="text-center mb-20">
               Enter your name and start guessing songs!
             </p>
@@ -122,7 +122,7 @@ const LandingPage = () => {
           <h3 className="subtitle text-center">How to Play</h3>
           <div className="grid">
             <div>
-              <h4>🎵 For Admins:</h4>
+              <h4>For Admins:</h4>
               <ul>
                 <li>Connect your Spotify account</li>
                 <li>Select a playlist to play from</li>
@@ -131,15 +131,15 @@ const LandingPage = () => {
               </ul>
             </div>
             <div>
-                          <h4>🎯 For Players:</h4>
-            <ul>
-              <li>Enter your unique player name (no duplicates allowed)</li>
-              <li>Listen to the music being played</li>
-              <li>Guess the artist, song title, or lyrics</li>
-              <li>Earn points for correct guesses</li>
-              <li>Your score persists even if you disconnect and reconnect</li>
-              <li>Compete with other players in real-time</li>
-            </ul>
+              <h4>For Players:</h4>
+              <ul>
+                <li>Enter your unique player name (no duplicates allowed)</li>
+                <li>Listen to the music being played</li>
+                <li>Guess the artist, song title, or lyrics</li>
+                <li>Earn points for correct guesses</li>
+                <li>Your score persists even if you disconnect and reconnect</li>
+                <li>Compete with other players in real-time</li>
+              </ul>
             </div>
           </div>
         </div>

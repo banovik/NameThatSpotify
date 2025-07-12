@@ -10,7 +10,7 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "http://127.0.0.1:3001",
+    origin: process.env.FRONTEND_URL || "http://127.0.0.1:3001",
     methods: ["GET", "POST"]
   }
 });
@@ -46,7 +46,12 @@ let gameState = {
   trackStatus: {}, // Track status for each song: 'unplayed', 'played', 'partial', 'complete'
   bonusAwarded: false, // Track if bonus point has been awarded for current song
   playersWhoGuessed: new Set(), // Track which players have made correct guesses this round
-  activeUsernames: new Set() // Track which usernames are currently connected
+  activeUsernames: new Set(), // Track which usernames are currently connected
+  currentGuesses: {
+    artist: [],
+    title: [],
+    lyrics: []
+  } // Track all guesses for current song: { guess: string, player: string, timestamp: Date }
 };
 
 // Function to fetch lyrics from Genius
@@ -204,10 +209,10 @@ app.get('/auth/spotify/callback', async (req, res) => {
     gameState.accessToken = data.body.access_token;
     spotifyApi.setAccessToken(data.body.access_token);
     
-    res.redirect('http://127.0.0.1:3001/admin');
+    res.redirect(`${process.env.FRONTEND_URL || 'http://127.0.0.1:3001'}/admin`);
   } catch (error) {
     console.error('Error getting tokens:', error);
-    res.redirect('http://127.0.0.1:3001/?error=auth_failed');
+    res.redirect(`${process.env.FRONTEND_URL || 'http://127.0.0.1:3001'}/?error=auth_failed`);
   }
 });
 
@@ -309,6 +314,12 @@ app.post('/api/play', async (req, res) => {
     // Reset bonus flag and player tracking for new song
     gameState.bonusAwarded = false;
     gameState.playersWhoGuessed.clear();
+    // Clear all guesses for new song
+    gameState.currentGuesses = {
+      artist: [],
+      title: [],
+      lyrics: []
+    };
     
     // Mark track as played
     updateTrackStatus(track.body.id, 'played');
@@ -316,6 +327,11 @@ app.post('/api/play', async (req, res) => {
     // Notify all clients about new song
     console.log('Emitting newSong event to all clients:', songData);
     io.emit('newSong', songData);
+    
+    // Emit empty guesses for new song
+    io.emit('guessesUpdated', {
+      currentGuesses: gameState.currentGuesses
+    });
     
     res.json({ success: true, song: songData });
   } catch (error) {
@@ -397,6 +413,11 @@ app.post('/api/reset-playlist', (req, res) => {
   gameState.bonusAwarded = false;
   gameState.playersWhoGuessed.clear();
   gameState.activeUsernames.clear();
+  gameState.currentGuesses = {
+    artist: [],
+    title: [],
+    lyrics: []
+  };
   
   // Notify all clients
   io.emit('playlistReset');
@@ -524,6 +545,30 @@ io.on('connection', (socket) => {
     let allPartsGuessed = true;
     let validationError = null;
     
+    // Track all guesses (both correct and incorrect)
+    const timestamp = new Date();
+    if (artist && artist.trim()) {
+      gameState.currentGuesses.artist.push({
+        guess: artist.trim(),
+        player: playerName,
+        timestamp: timestamp
+      });
+    }
+    if (title && title.trim()) {
+      gameState.currentGuesses.title.push({
+        guess: title.trim(),
+        player: playerName,
+        timestamp: timestamp
+      });
+    }
+    if (lyrics && lyrics.trim()) {
+      gameState.currentGuesses.lyrics.push({
+        guess: lyrics.trim(),
+        player: playerName,
+        timestamp: timestamp
+      });
+    }
+    
     // Check artist guess
     if (artist && !gameState.guessedParts.artist) {
       // Normalize the guess for comparison
@@ -621,6 +666,11 @@ io.on('connection', (socket) => {
     } else {
       socket.emit('incorrectGuess');
     }
+    
+    // Emit updated guesses to all clients (including admin)
+    io.emit('guessesUpdated', {
+      currentGuesses: gameState.currentGuesses
+    });
   });
   
   // Player disconnects

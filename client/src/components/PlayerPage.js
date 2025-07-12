@@ -34,8 +34,9 @@ const PlayerPage = () => {
     }
 
     // Initialize Socket.IO connection
-    console.log('Attempting to connect to Socket.IO server at http://127.0.0.1:5001');
-    const newSocket = io('http://127.0.0.1:5001', {
+    const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://127.0.0.1:5001';
+    console.log('Attempting to connect to Socket.IO server at', backendUrl);
+    const newSocket = io(backendUrl, {
       transports: ['websocket', 'polling'],
       timeout: 20000
     });
@@ -43,16 +44,16 @@ const PlayerPage = () => {
 
     // Socket event listeners
     newSocket.on('connect', () => {
-      console.log('✅ Connected to server with socket ID:', newSocket.id);
+      console.log('Connected to server with socket ID:', newSocket.id);
       newSocket.emit('playerJoin', location.state.playerName);
     });
 
     newSocket.on('connect_error', (error) => {
-      console.error('❌ Socket connection error:', error);
+      console.error('Socket connection error:', error);
     });
 
     newSocket.on('disconnect', (reason) => {
-      console.log('🔌 Disconnected from server:', reason);
+      console.log('Disconnected from server:', reason);
     });
 
     newSocket.on('gameState', (gameState) => {
@@ -104,7 +105,7 @@ const PlayerPage = () => {
       // Check if all parts have been guessed
       if (data.allPartsGuessed) {
         setCanGuess(false);
-        let message = `🎉 Round complete! All parts of the song have been guessed!`;
+        let message = `Round complete. All parts of the song have been guessed!`;
         if (data.bonusAwarded) {
           message += ` 🏆 ${data.playerName} earned a bonus point for completing all parts first!`;
         }
@@ -230,7 +231,7 @@ const PlayerPage = () => {
 
   return (
     <div className="container">
-      <h1 className="title">🎯 Player: {playerName}</h1>
+      <h1 className="title">Player: {playerName}</h1>
       
       {message && (
         <div className="card" style={getMessageStyle()}>
@@ -241,7 +242,7 @@ const PlayerPage = () => {
       {/* Guessing Form */}
       {currentSong && (
         <div className="card">
-          <h2 className="subtitle">🎯 Make Your Guess</h2>
+          <h2 className="subtitle">Make Your Guess</h2>
           
           {/* Progress Indicator */}
           <div className="progress-indicator mb-20">
@@ -321,7 +322,7 @@ const PlayerPage = () => {
       {/* Current Song Info */}
       {currentSong && (
         <div className="card">
-          <h2 className="subtitle">🎵 Now Playing</h2>
+          <h2 className="subtitle">Now Playing</h2>
           <div className="now-playing">
             <h3>{guessedParts.title ? currentSong.name : '???'}</h3>
             <p>by {guessedParts.artist ? currentSong.artists.join(', ') : '???'}</p>
@@ -332,14 +333,14 @@ const PlayerPage = () => {
       {/* Game Status */}
       {!currentSong && (
         <div className="card">
-          <h2 className="subtitle">⏸️ Game Status</h2>
+          <h2 className="subtitle">Game Status</h2>
           <p className="text-center">Waiting for admin to start playing music...</p>
         </div>
       )}
 
       {/* Player Leaderboard */}
       <div className="card">
-        <h2 className="subtitle">🏆 Leaderboard</h2>
+        <h2 className="subtitle">Leaderboard</h2>
         <div className="flex-between mb-20">
           <span>Total Players: {Object.keys(players || {}).length} </span>
           <span>Your Score: {myScore}</span>
@@ -363,7 +364,7 @@ const PlayerPage = () => {
 
       {/* Game Instructions */}
       <div className="card">
-        <h2 className="subtitle">📖 How to Play</h2>
+        <h2 className="subtitle">How to Play</h2>
         <ul>
           <li>Listen to the music being played by the admin</li>
           <li>Guess the song title, artist, and any lyrics</li>

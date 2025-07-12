@@ -24,6 +24,11 @@ const AdminPage = () => {
   const [playbackDuration, setPlaybackDuration] = useState(0);
   const [isPlaybackActive, setIsPlaybackActive] = useState(false);
   const [trackStatus, setTrackStatus] = useState({});
+  const [currentGuesses, setCurrentGuesses] = useState({
+    artist: [],
+    title: [],
+    lyrics: []
+  });
 
   useEffect(() => {
     // Check if user is authenticated
@@ -43,8 +48,9 @@ const AdminPage = () => {
     checkAuthStatus();
 
     // Initialize Socket.IO connection for admin
-    console.log('Admin: Attempting to connect to Socket.IO server at http://127.0.0.1:5001');
-    const newSocket = io('http://127.0.0.1:5001', {
+    const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://127.0.0.1:5001';
+    console.log('Admin: Attempting to connect to Socket.IO server at', backendUrl);
+    const newSocket = io(backendUrl, {
       transports: ['websocket', 'polling'],
       timeout: 20000
     });
@@ -52,15 +58,15 @@ const AdminPage = () => {
 
     // Socket event listeners for admin
     newSocket.on('connect', () => {
-      console.log('✅ Admin connected to server with socket ID:', newSocket.id);
+      console.log('Admin connected to server with socket ID:', newSocket.id);
     });
 
     newSocket.on('connect_error', (error) => {
-      console.error('❌ Admin socket connection error:', error);
+      console.error('Admin socket connection error:', error);
     });
 
     newSocket.on('disconnect', (reason) => {
-      console.log('🔌 Admin disconnected from server:', reason);
+      console.log('Admin disconnected from server:', reason);
     });
 
     newSocket.on('gameState', (gameState) => {
@@ -106,6 +112,12 @@ const AdminPage = () => {
       setTrackStatus({});
       setCurrentTrack(null);
       setIsPlaying(false);
+      setCurrentGuesses({ artist: [], title: [], lyrics: [] });
+    });
+
+    newSocket.on('guessesUpdated', (data) => {
+      console.log('Admin: Guesses updated:', data.currentGuesses);
+      setCurrentGuesses(data.currentGuesses);
     });
 
     return () => {
@@ -334,10 +346,29 @@ const AdminPage = () => {
     }
   };
 
+  // Render guesses for a specific type
+  const renderGuesses = (guessType) => {
+    const guesses = currentGuesses[guessType] || [];
+    if (guesses.length === 0) {
+      return <p className="text-center" style={{ color: '#888', fontStyle: 'italic' }}>No guesses yet</p>;
+    }
+    
+    return (
+      <div className="guess-list">
+        {guesses.map((guess, index) => (
+          <div key={index} className="guess-item">
+            <span className="guess-text">"{guess.guess}"</span>
+            <span className="guess-player">| {guess.player}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="container">
       <div className="admin-header">
-        <h1 className="title">🎮 Admin Panel</h1>
+        <h1 className="title">Admin Panel</h1>
         <button className="btn btn-danger" onClick={handleLogout}>
           Logout
         </button>
@@ -352,7 +383,7 @@ const AdminPage = () => {
       {/* Spotify Authentication */}
       {error && error.includes('authenticate with Spotify') && (
         <div className="card">
-          <h2 className="subtitle">🎵 Spotify Authentication Required</h2>
+          <h2 className="subtitle">Spotify Authentication Required</h2>
           <p className="text-center mb-20">
             You need to authenticate with Spotify to use admin features.
           </p>
@@ -364,45 +395,9 @@ const AdminPage = () => {
         </div>
       )}
 
-      {/* Spotify Device Check */}
-      <div className="card">
-        <h2 className="subtitle">🎵 Spotify Device Status</h2>
-        <p className="text-center mb-20">
-          Make sure you have Spotify open and ready to play music.
-        </p>
-        <div className="flex-center">
-          <button className="btn btn-secondary" onClick={checkDevices}>
-            Check Available Devices
-          </button>
-        </div>
-        
-        {showDevices && (
-          <div className="mt-20">
-            <h4>Available Devices:</h4>
-            {devices.length > 0 ? (
-              <div className="player-list">
-                {devices.map((device, index) => (
-                  <div key={device.id} className="player-item">
-                    <span>{device.name}</span>
-                    <span style={{ color: device.is_active ? '#1db954' : '#666' }}>
-                      {device.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-center">No devices found. Please open Spotify on your desktop, mobile, or web player.</p>
-            )}
-          </div>
-        )}
-      </div>
-
       {/* Playlist Management */}
       <div className="card">
-        <h2 className="subtitle">📋 Playlist Management</h2>
-        <p className="text-center mb-20" style={{ fontSize: '0.9rem', color: '#666' }}>
-          Load any Spotify playlist to access all tracks (no 100-track limit).
-        </p>
+        <h2 className="subtitle">Playlist Management</h2>
         
         {!playlist ? (
           <form onSubmit={handlePlaylistSubmit}>
@@ -461,7 +456,7 @@ const AdminPage = () => {
       {/* Playback Controls */}
       {currentTrack && (
         <div className="card">
-          <h2 className="subtitle">🎵 Now Playing</h2>
+          <h2 className="subtitle">Now Playing</h2>
           <div className="now-playing">
             <h3>{currentTrack.name}</h3>
             <p>by {currentTrack.artists.map(a => a.name).join(', ')}</p>
@@ -515,7 +510,7 @@ const AdminPage = () => {
       {/* Correct Answers */}
       {currentTrack && (
         <div className="card">
-          <h2 className="subtitle">🎯 Correct Answers</h2>
+          <h2 className="subtitle">Correct Answers</h2>
           <div className="correct-answers">
             <div className="answer-item">
               <strong>Artist:</strong> {currentTrack.artists.map(a => a.name).join(', ')}
@@ -538,9 +533,30 @@ const AdminPage = () => {
         </div>
       )}
 
+      {/* Player Guesses */}
+      {currentTrack && (
+        <div className="card">
+          <h2 className="subtitle">Player Guesses</h2>
+          <div className="grid">
+            <div>
+              <h4 style={{ color: '#1db954', marginBottom: '10px' }}>Artist Guesses</h4>
+              {renderGuesses('artist')}
+            </div>
+            <div>
+              <h4 style={{ color: '#1db954', marginBottom: '10px' }}>Title Guesses</h4>
+              {renderGuesses('title')}
+            </div>
+            <div>
+              <h4 style={{ color: '#1db954', marginBottom: '10px' }}>Lyrics Guesses</h4>
+              {renderGuesses('lyrics')}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Player Tracking */}
       <div className="card">
-        <h2 className="subtitle">👥 Connected Players</h2>
+        <h2 className="subtitle">Connected Players</h2>
         <div className="flex-between mb-20">
           <span>Total Players: {Object.keys(players).length}</span>
           <button className="btn btn-secondary" onClick={resetScores}>
@@ -564,7 +580,7 @@ const AdminPage = () => {
 
       {/* Game Instructions */}
       <div className="card">
-        <h2 className="subtitle">📖 Admin Instructions</h2>
+        <h2 className="subtitle">Admin Instructions</h2>
         <ul>
           <li>Load a Spotify playlist using the URL</li>
           <li>Click "Play" on any track to start playing it</li>
@@ -573,6 +589,39 @@ const AdminPage = () => {
           <li>Use "Reset Scores" to start a new round</li>
           <li>Select a new playlist anytime to change the game</li>
         </ul>
+      </div>
+
+            {/* Spotify Device Check */}
+            <div className="card">
+        <h2 className="subtitle">Spotify Device Status</h2>
+        <p className="text-center mb-20">
+          Make sure you have Spotify open and ready to play music.
+        </p>
+        <div className="flex-center">
+          <button className="btn btn-secondary" onClick={checkDevices}>
+            Check Available Devices
+          </button>
+        </div>
+        
+        {showDevices && (
+          <div className="mt-20">
+            <h4>Available Devices:</h4>
+            {devices.length > 0 ? (
+              <div className="player-list">
+                {devices.map((device, index) => (
+                  <div key={device.id} className="player-item">
+                    <span>{device.name}</span>
+                    <span style={{ color: device.is_active ? '#1db954' : '#666' }}>
+                      {device.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-center">No devices found. Please open Spotify on your desktop, mobile, or web player.</p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
