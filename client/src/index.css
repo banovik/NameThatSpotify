@@ -181,6 +181,29 @@ body {
   border-color: #e1e5e9;
 }
 
+.input-warning {
+  border-color: #ffc107 !important;
+  background-color: #fffbf0;
+}
+
+.lyrics-input-container {
+  position: relative;
+  flex: 1;
+}
+
+.letter-count {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: #666;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 2px 6px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
 .player-list {
   max-height: 300px;
   overflow-y: auto;
@@ -233,6 +256,30 @@ body {
   color: #f8f9fa;
   font-weight: 600;
   min-width: 120px;
+}
+
+.lyrics-preview {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.lyrics-preview strong {
+  color: #f8f9fa;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 10px;
+}
+
+.lyrics-text {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.4;
+  max-height: 100px;
+  overflow-y: auto;
+  white-space: pre-wrap;
 }
 
 .guess-form {

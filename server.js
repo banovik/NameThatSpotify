@@ -3,6 +3,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const SpotifyWebApi = require('spotify-web-api-node');
+const { Client } = require('genius-lyrics');
 require('dotenv').config();
 
 const app = express();
@@ -26,6 +27,9 @@ const spotifyApi = new SpotifyWebApi({
   redirectUri: process.env.SPOTIFY_REDIRECT_URI
 });
 
+// Genius API configuration
+const geniusClient = new Client(process.env.GENIUS_ACCESS_TOKEN || '');
+
 // Game state
 let gameState = {
   currentSong: null,
@@ -40,6 +44,119 @@ let gameState = {
     lyrics: false
   }
 };
+
+// Function to fetch lyrics from Genius
+async function fetchLyrics(artistName, songTitle) {
+  try {
+    if (!process.env.GENIUS_ACCESS_TOKEN) {
+      console.log('No Genius access token provided, skipping lyrics fetch');
+      return null;
+    }
+
+    console.log(`Searching for lyrics: ${songTitle} by ${artistName}`);
+    
+    // Search for the song on Genius
+    const searches = await geniusClient.songs.search(`${songTitle} ${artistName}`);
+    
+    if (searches.length === 0) {
+      console.log('No songs found on Genius');
+      return null;
+    }
+    
+    // Get the first (most relevant) result
+    const song = searches[0];
+    console.log(`Found song on Genius: ${song.title} by ${song.artist.name}`);
+    
+    // Fetch the lyrics
+    const lyrics = await song.lyrics();
+    console.log(`Successfully fetched lyrics (${lyrics.length} characters)`);
+    
+    return lyrics;
+  } catch (error) {
+    console.error('Error fetching lyrics from Genius:', error);
+    return null;
+  }
+}
+
+// Function to normalize text for lyrics comparison
+function normalizeText(text) {
+  if (!text) return '';
+  
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, '') // Remove punctuation and special characters
+    .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+    .trim();
+}
+
+// Function to count letters in text (excluding spaces and special characters)
+function countLetters(text) {
+  if (!text) return 0;
+  
+  return text
+    .toLowerCase()
+    .replace(/[^\w]/g, '') // Remove all non-word characters
+    .length;
+}
+
+// Function to normalize song titles for comparison
+function normalizeTitle(title) {
+  if (!title) return '';
+  
+  return title
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, '') // Remove anything in parentheses
+    .replace(/[^\w\s]/g, '') // Remove special characters
+    .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+    .trim();
+}
+
+// Function to normalize artist names for comparison
+function normalizeArtist(artist) {
+  if (!artist) return '';
+  
+  return artist
+    .toLowerCase()
+    .replace(/[^\w\s]/g, '') // Remove special characters
+    .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+    .trim();
+}
+
+// Function to fetch all tracks from a playlist (handles pagination)
+async function fetchAllPlaylistTracks(playlistId) {
+  try {
+    let allTracks = [];
+    let offset = 0;
+    const limit = 100; // Spotify API limit per request
+    
+    while (true) {
+      console.log(`Fetching playlist tracks: offset ${offset}, limit ${limit}`);
+      
+      const response = await spotifyApi.getPlaylistTracks(playlistId, {
+        offset: offset,
+        limit: limit
+      });
+      
+      const tracks = response.body.items;
+      allTracks = allTracks.concat(tracks);
+      
+      console.log(`Fetched ${tracks.length} tracks (total so far: ${allTracks.length})`);
+      
+      // If we got fewer tracks than the limit, we've reached the end
+      if (tracks.length < limit) {
+        break;
+      }
+      
+      offset += limit;
+    }
+    
+    console.log(`Successfully fetched all ${allTracks.length} tracks from playlist`);
+    return allTracks;
+  } catch (error) {
+    console.error('Error fetching all playlist tracks:', error);
+    throw error;
+  }
+}
 
 // Admin password verification
 app.post('/api/verify-admin', (req, res) => {
@@ -94,10 +211,24 @@ app.post('/api/playlist', async (req, res) => {
       return res.status(400).json({ error: 'Invalid playlist URL' });
     }
     
+    // Get playlist metadata
     const playlist = await spotifyApi.getPlaylist(playlistId);
-    gameState.currentPlaylist = playlist.body;
     
-    res.json({ success: true, playlist: playlist.body });
+    // Fetch all tracks from the playlist (handles pagination)
+    const allTracks = await fetchAllPlaylistTracks(playlistId);
+    
+    // Create the complete playlist object with all tracks
+    const completePlaylist = {
+      ...playlist.body,
+      tracks: {
+        ...playlist.body.tracks,
+        items: allTracks
+      }
+    };
+    
+    gameState.currentPlaylist = completePlaylist;
+    
+    res.json({ success: true, playlist: completePlaylist });
   } catch (error) {
     console.error('Error fetching playlist:', error);
     res.status(500).json({ error: 'Failed to fetch playlist' });
@@ -130,14 +261,18 @@ app.post('/api/play', async (req, res) => {
     const trackId = trackUri.split(':')[2];
     const track = await spotifyApi.getTrack(trackId);
     
-    // Get lyrics (Note: Spotify doesn't provide lyrics API, we'll use a placeholder)
+    // Fetch lyrics from Genius
+    const artistName = track.body.artists[0].name;
+    const songTitle = track.body.name;
+    const lyrics = await fetchLyrics(artistName, songTitle);
+    
     const songData = {
       id: track.body.id,
       name: track.body.name,
       artists: track.body.artists.map(artist => artist.name),
       album: track.body.album.name,
       uri: track.body.uri,
-      lyrics: `Sample lyrics for ${track.body.name} by ${track.body.artists[0].name}` // Placeholder
+      lyrics: lyrics || `Lyrics not available for ${songTitle} by ${artistName}`
     };
     
     gameState.currentSong = songData;
@@ -242,33 +377,56 @@ io.on('connection', (socket) => {
     const { artist, title, lyrics } = guess;
     let correctParts = [];
     let allPartsGuessed = true;
+    let validationError = null;
     
     // Check artist guess
     if (artist && !gameState.guessedParts.artist) {
-      if (gameState.currentSong.artists.some(a => 
-        a.toLowerCase().includes(artist.toLowerCase()) || 
-        artist.toLowerCase().includes(a.toLowerCase())
-      )) {
+      // Normalize the guess for comparison
+      const normalizedGuess = normalizeArtist(artist);
+      
+      // Check against all artists in the song
+      const correctArtist = gameState.currentSong.artists.find(a => {
+        const normalizedArtist = normalizeArtist(a);
+        return normalizedArtist.includes(normalizedGuess) || normalizedGuess.includes(normalizedArtist);
+      });
+      
+      if (correctArtist) {
         gameState.guessedParts.artist = true;
         gameState.scores[playerName]++;
         correctParts.push('artist');
-        console.log(`🎤 Artist guessed correctly by ${playerName}: ${artist}`);
+        console.log(`🎤 Artist guessed correctly by ${playerName}: ${artist} (matched: ${correctArtist}, normalized: ${normalizedGuess})`);
       }
     }
     
     // Check title guess
     if (title && !gameState.guessedParts.title) {
-      if (gameState.currentSong.name.toLowerCase().includes(title.toLowerCase())) {
+      // Normalize both the actual title and the guess for comparison
+      const normalizedActualTitle = normalizeTitle(gameState.currentSong.name);
+      const normalizedGuess = normalizeTitle(title);
+      
+      if (normalizedActualTitle.includes(normalizedGuess) || normalizedGuess.includes(normalizedActualTitle)) {
         gameState.guessedParts.title = true;
         gameState.scores[playerName]++;
         correctParts.push('title');
-        console.log(`🎵 Title guessed correctly by ${playerName}: ${title}`);
+        console.log(`🎵 Title guessed correctly by ${playerName}: ${title} (normalized: ${normalizedGuess})`);
       }
     }
     
     // Check lyrics guess
     if (lyrics && !gameState.guessedParts.lyrics) {
-      if (gameState.currentSong.lyrics.toLowerCase().includes(lyrics.toLowerCase())) {
+      // Check minimum length requirement (12 letters)
+      const letterCount = countLetters(lyrics);
+      if (letterCount < 12) {
+        validationError = `Lyrics guess must be at least 12 letters long (you have ${letterCount})`;
+        socket.emit('validationError', { error: validationError });
+        return;
+      }
+      
+      // Normalize both the lyrics and the guess for comparison
+      const normalizedLyrics = normalizeText(gameState.currentSong.lyrics);
+      const normalizedGuess = normalizeText(lyrics);
+      
+      if (normalizedLyrics.includes(normalizedGuess)) {
         gameState.guessedParts.lyrics = true;
         gameState.scores[playerName]++;
         correctParts.push('lyrics');

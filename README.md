@@ -31,6 +31,7 @@ A multiplayer music guessing game that uses Spotify's API to create an interacti
 - npm or yarn
 - Spotify account
 - Spotify Developer App (for API credentials)
+- Genius API account (optional, for lyrics)
 
 ### 1. Clone and Install
 
@@ -43,12 +44,18 @@ npm install
 cd ..
 ```
 
-### 2. Spotify API Setup
+### 2. API Setup
 
+#### Spotify API Setup
 1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
 2. Create a new app
 3. Add `http://127.0.0.1:5001/auth/spotify/callback` to your Redirect URIs
 4. Copy your Client ID and Client Secret
+
+#### Genius API Setup (Optional - for lyrics)
+1. Go to [Genius API Clients](https://genius.com/api-clients)
+2. Create a new API client
+3. Copy your Access Token
 
 ### 3. Environment Configuration
 
@@ -58,7 +65,7 @@ Create a `.env` file in the root directory:
 cp env.example .env
 ```
 
-Edit `.env` with your Spotify credentials and admin password:
+Edit `.env` with your credentials:
 
 ```env
 SPOTIFY_CLIENT_ID=your_spotify_client_id_here
@@ -66,6 +73,7 @@ SPOTIFY_CLIENT_SECRET=your_spotify_client_secret_here
 SPOTIFY_REDIRECT_URI=http://127.0.0.1:5001/auth/spotify/callback
 PORT=5001
 ADMIN_PASSWORD=your_admin_password_here
+GENIUS_ACCESS_TOKEN=your_genius_access_token_here
 ```
 
 ### 4. Start the Application

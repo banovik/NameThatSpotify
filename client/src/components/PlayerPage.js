@@ -15,6 +15,7 @@ const PlayerPage = () => {
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('info');
   const [canGuess, setCanGuess] = useState(true);
+  const [lyricsLetterCount, setLyricsLetterCount] = useState(0);
   const [guessedParts, setGuessedParts] = useState({ artist: false, title: false, lyrics: false });
 
   useEffect(() => {
@@ -110,6 +111,10 @@ const PlayerPage = () => {
       setMessage('Incorrect guess. Try again!', 'error');
     });
 
+    newSocket.on('validationError', (data) => {
+      setMessage(data.error, 'error');
+    });
+
     newSocket.on('scoresReset', () => {
       setScores({});
       setMessage('Scores have been reset!', 'info');
@@ -140,6 +145,12 @@ const PlayerPage = () => {
 
   const handleInputChange = (field, value) => {
     setGuess(prev => ({ ...prev, [field]: value }));
+    
+    // Count letters for lyrics input
+    if (field === 'lyrics') {
+      const letterCount = value.replace(/[^\w]/g, '').length;
+      setLyricsLetterCount(letterCount);
+    }
   };
 
   const getMessageStyle = () => {
@@ -162,21 +173,6 @@ const PlayerPage = () => {
       {message && (
         <div className="card" style={getMessageStyle()}>
           <p>{message}</p>
-        </div>
-      )}
-
-      {/* Current Song Info */}
-      {currentSong && (
-        <div className="card">
-          <h2 className="subtitle">🎵 Now Playing</h2>
-          <div className="now-playing">
-            <h3>???</h3>
-            <p>by ???</p>
-            <p>Album: ???</p>
-            <div className="flex-center mt-20">
-              <span className="score">Your Score: {myScore}</span>
-            </div>
-          </div>
         </div>
       )}
 
@@ -220,14 +216,21 @@ const PlayerPage = () => {
                   onChange={(e) => handleInputChange('title', e.target.value)}
                   disabled={guessedParts.title}
                 />
-                <input
-                  type="text"
-                  className={`input ${guessedParts.lyrics ? 'disabled' : ''}`}
-                  placeholder={guessedParts.lyrics ? "Lyrics already guessed ✓" : "Lyrics (any part)"}
-                  value={guess.lyrics}
-                  onChange={(e) => handleInputChange('lyrics', e.target.value)}
-                  disabled={guessedParts.lyrics}
-                />
+                <div className="lyrics-input-container">
+                  <input
+                    type="text"
+                    className={`input ${guessedParts.lyrics ? 'disabled' : ''} ${lyricsLetterCount > 0 && lyricsLetterCount < 12 ? 'input-warning' : ''}`}
+                    placeholder={guessedParts.lyrics ? "Lyrics already guessed ✓" : "Lyrics (min 12 letters)"}
+                    value={guess.lyrics}
+                    onChange={(e) => handleInputChange('lyrics', e.target.value)}
+                    disabled={guessedParts.lyrics}
+                  />
+                  {guess.lyrics && !guessedParts.lyrics && (
+                    <div className="letter-count">
+                      {lyricsLetterCount}/12 letters
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="flex-center">
                 <button 
@@ -243,10 +246,25 @@ const PlayerPage = () => {
           
           <p className="text-center" style={{ fontSize: '0.9rem', color: '#666' }}>
             {canGuess 
-              ? "Guess the artist, song title, or lyrics! Each correct guess earns 1 point."
+              ? "Guess the artist, song title, or lyrics! Special characters are ignored in all guesses. Lyrics must be at least 12 letters. Each correct guess earns 1 point."
               : "Round complete! Wait for the next song to start guessing again."
             }
           </p>
+        </div>
+      )}
+
+      {/* Current Song Info */}
+      {currentSong && (
+        <div className="card">
+          <h2 className="subtitle">🎵 Now Playing</h2>
+          <div className="now-playing">
+            <h3>???</h3>
+            <p>by ???</p>
+            <p>Album: ???</p>
+            <div className="flex-center mt-20">
+              <span className="score">Your Score: {myScore}</span>
+            </div>
+          </div>
         </div>
       )}
 
@@ -295,6 +313,10 @@ const PlayerPage = () => {
         <ul>
           <li>Listen to the music being played by the admin</li>
           <li>Guess the artist, song title, or any lyrics</li>
+          <li>Artist names: Special characters are ignored</li>
+          <li>Song titles: Parentheses and special characters are ignored</li>
+          <li>Lyrics guesses must be at least 12 letters long</li>
+          <li>Punctuation and special characters are ignored in lyrics</li>
           <li>You only need to get one correct to earn a point</li>
           <li>Once someone guesses correctly, the round ends</li>
           <li>Wait for the next song to start guessing again</li>

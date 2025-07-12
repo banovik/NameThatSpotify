@@ -19,18 +19,18 @@ const AdminPage = () => {
   const [showDevices, setShowDevices] = useState(false);
   const [guessedParts, setGuessedParts] = useState({ artist: false, title: false, lyrics: false });
 
-  const checkAuthStatus = async () => {
-    try {
-      // This would check if the user has a valid Spotify token
-      // For now, we'll assume they're authenticated if they reach this page
-    } catch (error) {
-      console.error('Auth check failed:', error);
-      navigate('/');
-    }
-  };
-
   useEffect(() => {
     // Check if user is authenticated
+    const checkAuthStatus = async () => {
+      try {
+        // This would check if the user has a valid Spotify token
+        // For now, we'll assume they're authenticated if they reach this page
+      } catch (error) {
+        console.error('Auth check failed:', error);
+        navigate('/');
+      }
+    };
+
     checkAuthStatus();
 
     // Initialize Socket.IO connection for admin
@@ -207,6 +207,9 @@ const AdminPage = () => {
       {/* Playlist Management */}
       <div className="card">
         <h2 className="subtitle">📋 Playlist Management</h2>
+        <p className="text-center mb-20" style={{ fontSize: '0.9rem', color: '#666' }}>
+          Load any Spotify playlist to access all tracks (no 100-track limit).
+        </p>
         
         {!playlist ? (
           <form onSubmit={handlePlaylistSubmit}>
@@ -224,7 +227,7 @@ const AdminPage = () => {
                 className="btn"
                 disabled={loading || !playlistUrl}
               >
-                {loading ? 'Loading...' : 'Load Playlist'}
+                {loading ? 'Loading all tracks...' : 'Load Playlist'}
               </button>
             </div>
           </form>
@@ -309,6 +312,14 @@ const AdminPage = () => {
             <div className="answer-item">
               <strong>Lyrics:</strong> <em>Players need to guess lyrics from the song</em>
             </div>
+            {currentTrack.lyrics && currentTrack.lyrics !== `Lyrics not available for ${currentTrack.name} by ${currentTrack.artists[0]}` && (
+              <div className="lyrics-preview">
+                <strong>Lyrics Preview:</strong>
+                <div className="lyrics-text">
+                  {currentTrack.lyrics.substring(0, 200)}...
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
