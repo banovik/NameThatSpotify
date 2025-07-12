@@ -126,6 +126,61 @@ body {
   margin-top: 20px;
 }
 
+.mb-10 {
+  margin-bottom: 10px;
+}
+
+.error-text {
+  color: #dc3545;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.progress-indicator {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  background: #f8f9fa;
+  border-radius: 10px;
+  padding: 15px;
+  margin-bottom: 20px;
+}
+
+.progress-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.progress-dot {
+  font-size: 24px;
+  opacity: 0.5;
+  transition: all 0.3s ease;
+}
+
+.progress-dot.guessed {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.progress-label {
+  font-size: 12px;
+  color: #666;
+  font-weight: 500;
+}
+
+.input.disabled {
+  background-color: #f8f9fa;
+  color: #6c757d;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.input.disabled:focus {
+  border-color: #e1e5e9;
+}
+
 .player-list {
   max-height: 300px;
   overflow-y: auto;
@@ -152,6 +207,32 @@ body {
   padding: 20px;
   border-radius: 15px;
   margin-bottom: 20px;
+}
+
+.correct-answers {
+  background: linear-gradient(45deg, #667eea, #764ba2);
+  color: white;
+  padding: 20px;
+  border-radius: 15px;
+  margin-bottom: 20px;
+}
+
+.answer-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.answer-item:last-child {
+  border-bottom: none;
+}
+
+.answer-item strong {
+  color: #f8f9fa;
+  font-weight: 600;
+  min-width: 120px;
 }
 
 .guess-form {

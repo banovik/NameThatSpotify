@@ -1,20 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import io from 'socket.io-client';
 
 const AdminPage = () => {
   const navigate = useNavigate();
+  const [socket, setSocket] = useState(null);
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [playlist, setPlaylist] = useState(null);
   const [tracks, setTracks] = useState([]);
   const [currentTrack, setCurrentTrack] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [players] = useState({});
+  const [players, setPlayers] = useState({});
   const [scores, setScores] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [devices, setDevices] = useState([]);
   const [showDevices, setShowDevices] = useState(false);
+  const [guessedParts, setGuessedParts] = useState({ artist: false, title: false, lyrics: false });
 
   const checkAuthStatus = async () => {
     try {
@@ -29,6 +32,62 @@ const AdminPage = () => {
   useEffect(() => {
     // Check if user is authenticated
     checkAuthStatus();
+
+    // Initialize Socket.IO connection for admin
+    console.log('Admin: Attempting to connect to Socket.IO server at http://127.0.0.1:5001');
+    const newSocket = io('http://127.0.0.1:5001', {
+      transports: ['websocket', 'polling'],
+      timeout: 20000
+    });
+    setSocket(newSocket);
+
+    // Socket event listeners for admin
+    newSocket.on('connect', () => {
+      console.log('✅ Admin connected to server with socket ID:', newSocket.id);
+    });
+
+    newSocket.on('connect_error', (error) => {
+      console.error('❌ Admin socket connection error:', error);
+    });
+
+    newSocket.on('disconnect', (reason) => {
+      console.log('🔌 Admin disconnected from server:', reason);
+    });
+
+    newSocket.on('gameState', (gameState) => {
+      console.log('Admin received game state:', gameState);
+      setPlayers(gameState.players || {});
+      setScores(gameState.scores || {});
+      setIsPlaying(gameState.isPlaying);
+      setGuessedParts(gameState.guessedParts || { artist: false, title: false, lyrics: false });
+    });
+
+    newSocket.on('playerJoined', (data) => {
+      console.log('Admin: Player joined:', data);
+      setPlayers(data.players || {});
+      setScores(data.scores || {});
+    });
+
+    newSocket.on('playerLeft', (data) => {
+      console.log('Admin: Player left:', data);
+      setPlayers(data.players || {});
+      setScores(data.scores || {});
+    });
+
+    newSocket.on('correctGuess', (data) => {
+      console.log('Admin: Correct guess:', data);
+      setScores(data.scores || {});
+      setGuessedParts(data.guessedParts || { artist: false, title: false, lyrics: false });
+    });
+
+    newSocket.on('scoresReset', () => {
+      console.log('Admin: Scores reset');
+      setScores({});
+    });
+
+    return () => {
+      newSocket.close();
+    };
   }, [navigate]);
 
   const checkDevices = async () => {
@@ -206,6 +265,23 @@ const AdminPage = () => {
             <h3>{currentTrack.name}</h3>
             <p>by {currentTrack.artists.map(a => a.name).join(', ')}</p>
             <p>Album: {currentTrack.album.name}</p>
+            
+            {/* Progress Indicator */}
+            <div className="progress-indicator mt-20">
+              <div className="progress-item">
+                <span className={`progress-dot ${guessedParts.artist ? 'guessed' : ''}`}>🎤</span>
+                <span className="progress-label">Artist {guessedParts.artist ? '✓' : ''}</span>
+              </div>
+              <div className="progress-item">
+                <span className={`progress-dot ${guessedParts.title ? 'guessed' : ''}`}>🎵</span>
+                <span className="progress-label">Title {guessedParts.title ? '✓' : ''}</span>
+              </div>
+              <div className="progress-item">
+                <span className={`progress-dot ${guessedParts.lyrics ? 'guessed' : ''}`}>📝</span>
+                <span className="progress-label">Lyrics {guessedParts.lyrics ? '✓' : ''}</span>
+              </div>
+            </div>
+            
             <div className="flex-center mt-20">
               <button 
                 className="btn btn-danger" 
@@ -214,6 +290,24 @@ const AdminPage = () => {
               >
                 Pause
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Correct Answers */}
+      {currentTrack && (
+        <div className="card">
+          <h2 className="subtitle">🎯 Correct Answers</h2>
+          <div className="correct-answers">
+            <div className="answer-item">
+              <strong>Artist:</strong> {currentTrack.artists.map(a => a.name).join(', ')}
+            </div>
+            <div className="answer-item">
+              <strong>Title:</strong> {currentTrack.name}
+            </div>
+            <div className="answer-item">
+              <strong>Lyrics:</strong> <em>Players need to guess lyrics from the song</em>
             </div>
           </div>
         </div>

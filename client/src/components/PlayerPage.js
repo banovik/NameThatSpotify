@@ -15,6 +15,7 @@ const PlayerPage = () => {
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('info');
   const [canGuess, setCanGuess] = useState(true);
+  const [guessedParts, setGuessedParts] = useState({ artist: false, title: false, lyrics: false });
 
   useEffect(() => {
     // Get player name from navigation state
@@ -53,6 +54,7 @@ const PlayerPage = () => {
       setPlayers(gameState.players || {});
       setScores(gameState.scores || {});
       setIsPlaying(gameState.isPlaying);
+      setGuessedParts(gameState.guessedParts || { artist: false, title: false, lyrics: false });
     });
 
     newSocket.on('newSong', (song) => {
@@ -60,6 +62,7 @@ const PlayerPage = () => {
       setCurrentSong(song);
       setIsPlaying(true);
       setCanGuess(true);
+      setGuessedParts({ artist: false, title: false, lyrics: false });
       setMessage('New song started! Start guessing!');
       setMessageType('success');
     });
@@ -82,9 +85,25 @@ const PlayerPage = () => {
     });
 
     newSocket.on('correctGuess', (data) => {
+      setPlayers(data.players || {});
       setScores(data.scores || {});
-      setCanGuess(false);
-      setMessage(`🎉 ${data.playerName} guessed correctly!`, 'success');
+      setGuessedParts(data.guessedParts || { artist: false, title: false, lyrics: false });
+      
+      // Check if all parts have been guessed
+      if (data.allPartsGuessed) {
+        setCanGuess(false);
+        setMessage(`🎉 Round complete! All parts of the song have been guessed!`, 'success');
+      } else {
+        const correctPartsText = data.correctParts.map(part => {
+          switch(part) {
+            case 'artist': return 'artist';
+            case 'title': return 'song title';
+            case 'lyrics': return 'lyrics';
+            default: return part;
+          }
+        }).join(', ');
+        setMessage(`🎉 ${data.playerName} guessed the ${correctPartsText} correctly!`, 'success');
+      }
     });
 
     newSocket.on('incorrectGuess', () => {
@@ -162,41 +181,71 @@ const PlayerPage = () => {
       )}
 
       {/* Guessing Form */}
-      {isPlaying && canGuess && (
+      {isPlaying && (
         <div className="card">
           <h2 className="subtitle">🎯 Make Your Guess</h2>
-          <form onSubmit={handleGuessSubmit} className="guess-form">
-            <div className="guess-input">
-              <input
-                type="text"
-                className="input"
-                placeholder="Artist name"
-                value={guess.artist}
-                onChange={(e) => handleInputChange('artist', e.target.value)}
-              />
-              <input
-                type="text"
-                className="input"
-                placeholder="Song title"
-                value={guess.title}
-                onChange={(e) => handleInputChange('title', e.target.value)}
-              />
-              <input
-                type="text"
-                className="input"
-                placeholder="Lyrics (any part)"
-                value={guess.lyrics}
-                onChange={(e) => handleInputChange('lyrics', e.target.value)}
-              />
+          
+          {/* Progress Indicator */}
+          <div className="progress-indicator mb-20">
+            <div className="progress-item">
+              <span className={`progress-dot ${guessedParts.artist ? 'guessed' : ''}`}>🎤</span>
+              <span className="progress-label">Artist {guessedParts.artist ? '✓' : ''}</span>
             </div>
-            <div className="flex-center">
-              <button type="submit" className="btn">
-                Submit Guess
-              </button>
+            <div className="progress-item">
+              <span className={`progress-dot ${guessedParts.title ? 'guessed' : ''}`}>🎵</span>
+              <span className="progress-label">Title {guessedParts.title ? '✓' : ''}</span>
             </div>
-          </form>
+            <div className="progress-item">
+              <span className={`progress-dot ${guessedParts.lyrics ? 'guessed' : ''}`}>📝</span>
+              <span className="progress-label">Lyrics {guessedParts.lyrics ? '✓' : ''}</span>
+            </div>
+          </div>
+          
+          {canGuess && (
+            <form onSubmit={handleGuessSubmit} className="guess-form">
+              <div className="guess-input">
+                <input
+                  type="text"
+                  className={`input ${guessedParts.artist ? 'disabled' : ''}`}
+                  placeholder={guessedParts.artist ? "Artist already guessed ✓" : "Artist name"}
+                  value={guess.artist}
+                  onChange={(e) => handleInputChange('artist', e.target.value)}
+                  disabled={guessedParts.artist}
+                />
+                <input
+                  type="text"
+                  className={`input ${guessedParts.title ? 'disabled' : ''}`}
+                  placeholder={guessedParts.title ? "Title already guessed ✓" : "Song title"}
+                  value={guess.title}
+                  onChange={(e) => handleInputChange('title', e.target.value)}
+                  disabled={guessedParts.title}
+                />
+                <input
+                  type="text"
+                  className={`input ${guessedParts.lyrics ? 'disabled' : ''}`}
+                  placeholder={guessedParts.lyrics ? "Lyrics already guessed ✓" : "Lyrics (any part)"}
+                  value={guess.lyrics}
+                  onChange={(e) => handleInputChange('lyrics', e.target.value)}
+                  disabled={guessedParts.lyrics}
+                />
+              </div>
+              <div className="flex-center">
+                <button 
+                  type="submit" 
+                  className="btn"
+                  disabled={!guess.artist && !guess.title && !guess.lyrics}
+                >
+                  Submit Guess
+                </button>
+              </div>
+            </form>
+          )}
+          
           <p className="text-center" style={{ fontSize: '0.9rem', color: '#666' }}>
-            You can guess the artist, song title, or any lyrics from the song!
+            {canGuess 
+              ? "Guess the artist, song title, or lyrics! Each correct guess earns 1 point."
+              : "Round complete! Wait for the next song to start guessing again."
+            }
           </p>
         </div>
       )}
@@ -220,7 +269,7 @@ const PlayerPage = () => {
       <div className="card">
         <h2 className="subtitle">🏆 Leaderboard</h2>
         <div className="flex-between mb-20">
-          <span>Total Players: {Object.keys(players || {}).length}</span>
+          <span>Total Players: {Object.keys(players || {}).length} </span>
           <span>Your Score: {myScore}</span>
         </div>
         

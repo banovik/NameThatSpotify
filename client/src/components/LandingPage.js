@@ -5,18 +5,38 @@ import axios from 'axios';
 const LandingPage = () => {
   const navigate = useNavigate();
   const [playerName, setPlayerName] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [adminError, setAdminError] = useState('');
 
   const handleAdminLogin = async () => {
+    if (!adminPassword.trim()) {
+      setAdminError('Please enter the admin password');
+      return;
+    }
+
     setLoading(true);
+    setAdminError('');
+    
     try {
-      // Get the Spotify authorization URL from the backend
-      const response = await axios.get('/auth/spotify');
-      // Redirect to Spotify's authorization page
-      window.location.href = response.data.url;
+      // First verify admin password
+      const verifyResponse = await axios.post('/api/verify-admin', {
+        password: adminPassword
+      });
+      
+      if (verifyResponse.data.success) {
+        // Password is correct, proceed with Spotify auth
+        const response = await axios.get('/auth/spotify');
+        // Redirect to Spotify's authorization page
+        window.location.href = response.data.url;
+      }
     } catch (error) {
-      console.error('Error getting Spotify auth URL:', error);
-      alert('Failed to connect to Spotify. Please try again.');
+      console.error('Error during admin login:', error);
+      if (error.response?.status === 401) {
+        setAdminError('Invalid admin password');
+      } else {
+        setAdminError('Failed to connect to server. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -46,11 +66,22 @@ const LandingPage = () => {
             <p className="text-center mb-20">
               Control the game, manage playlists, and track player scores.
             </p>
+            <input
+              type="password"
+              className="input"
+              placeholder="Enter admin password"
+              value={adminPassword}
+              onChange={(e) => setAdminPassword(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleAdminLogin()}
+            />
+            {adminError && (
+              <p className="error-text text-center mb-10">{adminError}</p>
+            )}
             <div className="flex-center">
               <button 
                 className="btn" 
                 onClick={handleAdminLogin}
-                disabled={loading}
+                disabled={loading || !adminPassword.trim()}
               >
                 {loading ? 'Connecting...' : 'Login as Admin'}
               </button>

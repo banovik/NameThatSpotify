@@ -12,10 +12,11 @@ A multiplayer music guessing game that uses Spotify's API to create an interacti
 - **Score Management**: Reset scores and start new rounds
 
 ### 🎯 Player Experience
-- **Real-time Guessing**: Guess artist names, song titles, or lyrics
+- **Real-time Guessing**: Guess artist names, song titles, or lyrics independently
 - **Live Leaderboard**: See scores update in real-time
-- **Competitive Gameplay**: First correct guess wins the round
+- **Competitive Gameplay**: Each correct guess earns 1 point, up to 3 points per song
 - **Multiple Players**: Support for unlimited concurrent players
+- **Progress Tracking**: Visual indicators show which parts of the song have been guessed
 
 ### 🔧 Technical Features
 - **Real-time Communication**: Socket.IO for instant updates
@@ -57,13 +58,14 @@ Create a `.env` file in the root directory:
 cp env.example .env
 ```
 
-Edit `.env` with your Spotify credentials:
+Edit `.env` with your Spotify credentials and admin password:
 
 ```env
 SPOTIFY_CLIENT_ID=your_spotify_client_id_here
 SPOTIFY_CLIENT_SECRET=your_spotify_client_secret_here
 SPOTIFY_REDIRECT_URI=http://127.0.0.1:5001/auth/spotify/callback
 PORT=5001
+ADMIN_PASSWORD=your_admin_password_here
 ```
 
 ### 4. Start the Application
@@ -83,7 +85,7 @@ The application will be available at:
 ## 🎮 How to Play
 
 ### For Admins:
-1. Click "Login as Admin" on the landing page
+1. Enter the admin password and click "Login as Admin" on the landing page
 2. Authorize with your Spotify account
 3. Enter a Spotify playlist URL
 4. Click "Play" on any track to start the game
@@ -93,8 +95,9 @@ The application will be available at:
 1. Enter your player name on the landing page
 2. Click "Join Game"
 3. Wait for the admin to start playing music
-4. Guess the artist, song title, or lyrics
-5. Earn points for correct guesses!
+4. Guess the artist, song title, or lyrics independently
+5. Earn 1 point for each correct guess (up to 3 points per song)
+6. Watch the progress indicators to see what's been guessed
 
 ## 🏗️ Project Structure
 

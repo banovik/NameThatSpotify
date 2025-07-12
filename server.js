@@ -33,8 +33,29 @@ let gameState = {
   scores: {},
   isPlaying: false,
   currentPlaylist: null,
-  accessToken: null
+  accessToken: null,
+  guessedParts: {
+    artist: false,
+    title: false,
+    lyrics: false
+  }
 };
+
+// Admin password verification
+app.post('/api/verify-admin', (req, res) => {
+  const { password } = req.body;
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  
+  if (!adminPassword) {
+    return res.status(500).json({ error: 'Admin password not configured' });
+  }
+  
+  if (password === adminPassword) {
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ error: 'Invalid admin password' });
+  }
+});
 
 // Spotify authentication
 app.get('/auth/spotify', (req, res) => {
@@ -120,6 +141,12 @@ app.post('/api/play', async (req, res) => {
     };
     
     gameState.currentSong = songData;
+    // Reset guessed parts for new song
+    gameState.guessedParts = {
+      artist: false,
+      title: false,
+      lyrics: false
+    };
     
     // Notify all clients about new song
     console.log('Emitting newSong event to all clients:', songData);
@@ -192,7 +219,8 @@ io.on('connection', (socket) => {
     currentSong: gameState.currentSong,
     players: gameState.players,
     scores: gameState.scores,
-    isPlaying: gameState.isPlaying
+    isPlaying: gameState.isPlaying,
+    guessedParts: gameState.guessedParts
   });
   
   // Player joins
@@ -201,7 +229,8 @@ io.on('connection', (socket) => {
     gameState.players[socket.id] = playerName;
     gameState.scores[playerName] = gameState.scores[playerName] || 0;
     
-    io.emit('playerJoined', { playerName, scores: gameState.scores });
+    io.emit('playerJoined', { playerName, players: gameState.players, scores: gameState.scores });
+    console.log(`📊 Updated players:`, gameState.players);
     console.log(`📊 Updated scores:`, gameState.scores);
   });
   
@@ -211,28 +240,57 @@ io.on('connection', (socket) => {
     if (!playerName || !gameState.currentSong) return;
     
     const { artist, title, lyrics } = guess;
-    let isCorrect = false;
+    let correctParts = [];
+    let allPartsGuessed = true;
     
-    // Check if guess matches current song
-    if (artist && gameState.currentSong.artists.some(a => 
-      a.toLowerCase().includes(artist.toLowerCase()) || 
-      artist.toLowerCase().includes(a.toLowerCase())
-    )) {
-      isCorrect = true;
+    // Check artist guess
+    if (artist && !gameState.guessedParts.artist) {
+      if (gameState.currentSong.artists.some(a => 
+        a.toLowerCase().includes(artist.toLowerCase()) || 
+        artist.toLowerCase().includes(a.toLowerCase())
+      )) {
+        gameState.guessedParts.artist = true;
+        gameState.scores[playerName]++;
+        correctParts.push('artist');
+        console.log(`🎤 Artist guessed correctly by ${playerName}: ${artist}`);
+      }
     }
     
-    if (title && gameState.currentSong.name.toLowerCase().includes(title.toLowerCase())) {
-      isCorrect = true;
+    // Check title guess
+    if (title && !gameState.guessedParts.title) {
+      if (gameState.currentSong.name.toLowerCase().includes(title.toLowerCase())) {
+        gameState.guessedParts.title = true;
+        gameState.scores[playerName]++;
+        correctParts.push('title');
+        console.log(`🎵 Title guessed correctly by ${playerName}: ${title}`);
+      }
     }
     
-    if (lyrics && gameState.currentSong.lyrics.toLowerCase().includes(lyrics.toLowerCase())) {
-      isCorrect = true;
+    // Check lyrics guess
+    if (lyrics && !gameState.guessedParts.lyrics) {
+      if (gameState.currentSong.lyrics.toLowerCase().includes(lyrics.toLowerCase())) {
+        gameState.guessedParts.lyrics = true;
+        gameState.scores[playerName]++;
+        correctParts.push('lyrics');
+        console.log(`📝 Lyrics guessed correctly by ${playerName}: ${lyrics}`);
+      }
     }
     
-    if (isCorrect) {
-      gameState.scores[playerName]++;
-      io.emit('correctGuess', { playerName, scores: gameState.scores });
-      console.log(`Correct guess by ${playerName}!`);
+    // Check if all parts have been guessed
+    if (!gameState.guessedParts.artist || !gameState.guessedParts.title || !gameState.guessedParts.lyrics) {
+      allPartsGuessed = false;
+    }
+    
+    if (correctParts.length > 0) {
+      io.emit('correctGuess', { 
+        playerName, 
+        players: gameState.players, 
+        scores: gameState.scores,
+        guessedParts: gameState.guessedParts,
+        correctParts,
+        allPartsGuessed
+      });
+      console.log(`✅ ${playerName} earned ${correctParts.length} point(s) for: ${correctParts.join(', ')}`);
     } else {
       socket.emit('incorrectGuess');
     }
@@ -243,8 +301,9 @@ io.on('connection', (socket) => {
     const playerName = gameState.players[socket.id];
     if (playerName) {
       delete gameState.players[socket.id];
-      io.emit('playerLeft', { playerName, scores: gameState.scores });
+      io.emit('playerLeft', { playerName, players: gameState.players, scores: gameState.scores });
       console.log(`Player left: ${playerName}`);
+      console.log(`📊 Updated players:`, gameState.players);
     }
   });
 });
