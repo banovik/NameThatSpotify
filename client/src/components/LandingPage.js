@@ -131,14 +131,15 @@ const LandingPage = () => {
               </ul>
             </div>
             <div>
-              <h4>🎯 For Players:</h4>
-              <ul>
-                <li>Enter your unique player name</li>
-                <li>Listen to the music being played</li>
-                <li>Guess the artist, song title, or lyrics</li>
-                <li>Earn points for correct guesses</li>
-                <li>Compete with other players in real-time</li>
-              </ul>
+                          <h4>🎯 For Players:</h4>
+            <ul>
+              <li>Enter your unique player name (no duplicates allowed)</li>
+              <li>Listen to the music being played</li>
+              <li>Guess the artist, song title, or lyrics</li>
+              <li>Earn points for correct guesses</li>
+              <li>Your score persists even if you disconnect and reconnect</li>
+              <li>Compete with other players in real-time</li>
+            </ul>
             </div>
           </div>
         </div>

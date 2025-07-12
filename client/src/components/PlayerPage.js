@@ -104,7 +104,11 @@ const PlayerPage = () => {
       // Check if all parts have been guessed
       if (data.allPartsGuessed) {
         setCanGuess(false);
-        setMessage(`🎉 Round complete! All parts of the song have been guessed!`, 'success');
+        let message = `🎉 Round complete! All parts of the song have been guessed!`;
+        if (data.bonusAwarded) {
+          message += ` 🏆 ${data.playerName} earned a bonus point for completing all parts first!`;
+        }
+        setMessage(message, 'success');
       } else {
         const correctPartsText = data.correctParts.map(part => {
           switch(part) {
@@ -124,6 +128,14 @@ const PlayerPage = () => {
 
     newSocket.on('validationError', (data) => {
       setMessage(data.error, 'error');
+    });
+
+    newSocket.on('usernameTaken', (data) => {
+      setMessage(data.error, 'error');
+      // Redirect back to landing page after a short delay
+      setTimeout(() => {
+        navigate('/');
+      }, 3000);
     });
 
     newSocket.on('scoresReset', () => {

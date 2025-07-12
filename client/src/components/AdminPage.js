@@ -23,6 +23,7 @@ const AdminPage = () => {
   const [playbackPosition, setPlaybackPosition] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
   const [isPlaybackActive, setIsPlaybackActive] = useState(false);
+  const [trackStatus, setTrackStatus] = useState({});
 
   useEffect(() => {
     // Check if user is authenticated
@@ -86,11 +87,25 @@ const AdminPage = () => {
       console.log('Admin: Correct guess:', data);
       setScores(data.scores || {});
       setGuessedParts(data.guessedParts || { artist: false, title: false, lyrics: false });
+      // Update track status when guesses happen
+      getTrackStatus();
+      
+      // Log bonus point if awarded
+      if (data.bonusAwarded) {
+        console.log(`🏆 Bonus point awarded to ${data.playerName} for completing all parts first!`);
+      }
     });
 
     newSocket.on('scoresReset', () => {
       console.log('Admin: Scores reset');
       setScores({});
+    });
+
+    newSocket.on('playlistReset', () => {
+      console.log('Admin: Playlist reset');
+      setTrackStatus({});
+      setCurrentTrack(null);
+      setIsPlaying(false);
     });
 
     return () => {
@@ -151,6 +166,8 @@ const AdminPage = () => {
       const response = await axios.post('/api/playlist', { playlistUrl });
       setPlaylist(response.data.playlist);
       setTracks(response.data.playlist.tracks.items);
+      // Get track status after loading playlist
+      await getTrackStatus();
       setError('');
     } catch (error) {
       setError('Failed to load playlist. Please check the URL and try again.');
@@ -166,6 +183,8 @@ const AdminPage = () => {
       setCurrentTrack(track);
       setIsPlaying(true);
       setError('');
+      // Update track status after playing
+      await getTrackStatus();
     } catch (error) {
       setError('Failed to play track. Make sure Spotify is open and playing.');
       console.error('Play error:', error);
@@ -272,6 +291,49 @@ const AdminPage = () => {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
+  // Get track status
+  const getTrackStatus = async () => {
+    try {
+      const response = await axios.get('/api/track-status');
+      if (response.data.success) {
+        setTrackStatus(response.data.trackStatus);
+      }
+    } catch (error) {
+      console.error('Error getting track status:', error);
+    }
+  };
+
+  // Reset playlist
+  const resetPlaylist = async () => {
+    try {
+      await axios.post('/api/reset-playlist');
+      setTrackStatus({});
+      setCurrentTrack(null);
+      setIsPlaying(false);
+      setError('');
+    } catch (error) {
+      setError('Failed to reset playlist.');
+      console.error('Reset playlist error:', error);
+    }
+  };
+
+  // Get status icon
+  const getStatusIcon = (trackId) => {
+    const status = trackStatus[trackId] || 'unplayed';
+    switch (status) {
+      case 'unplayed':
+        return '🟢'; // Green circle
+      case 'played':
+        return '🌑'; // Played but not guessed
+      case 'partial':
+        return '🌗'; // Partially guessed
+      case 'complete':
+        return '🌕'; // Fully guessed
+      default:
+        return '🟢';
+    }
+  };
+
   return (
     <div className="container">
       <div className="admin-header">
@@ -366,16 +428,21 @@ const AdminPage = () => {
           <div>
             <div className="flex-between mb-20">
               <h3>Current Playlist: {playlist.name}</h3>
-              <button className="btn btn-secondary" onClick={selectNewPlaylist}>
-                Select New Playlist
-              </button>
+              <div>
+                <button className="btn btn-secondary" onClick={resetPlaylist} style={{ marginRight: '10px' }}>
+                  Reset Playlist
+                </button>
+                <button className="btn btn-secondary" onClick={selectNewPlaylist}>
+                  Select New Playlist
+                </button>
+              </div>
             </div>
             
             <div className="player-list">
               {tracks.map((item, index) => (
                 <div key={item.track.id} className="player-item">
                   <div>
-                    <strong>{index + 1}.</strong> {item.track.name} - {item.track.artists.map(a => a.name).join(', ')}
+                    <strong>{index + 1}.</strong> {getStatusIcon(item.track.id)} {item.track.name} - {item.track.artists.map(a => a.name).join(', ')}
                   </div>
                   <button 
                     className="btn"

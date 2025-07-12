@@ -15,6 +15,7 @@ A multiplayer music guessing game that uses Spotify's API to create an interacti
 - **Real-time Guessing**: Guess artist names, song titles, or lyrics independently
 - **Live Leaderboard**: See scores update in real-time
 - **Competitive Gameplay**: Each correct guess earns 1 point, up to 3 points per song
+- **Bonus Points**: A player earns a bonus point only if they guess all three parts correctly alone (no other players have made correct guesses)
 - **Multiple Players**: Support for unlimited concurrent players
 - **Progress Tracking**: Visual indicators show which parts of the song have been guessed
 
@@ -105,7 +106,8 @@ The application will be available at:
 3. Wait for the admin to start playing music
 4. Guess the artist, song title, or lyrics independently
 5. Earn 1 point for each correct guess (up to 3 points per song)
-6. Watch the progress indicators to see what's been guessed
+6. Earn a bonus point only if you guess all three parts correctly alone (no other players have made correct guesses)
+7. Watch the progress indicators to see what's been guessed
 
 ## 🏗️ Project Structure
 

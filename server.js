@@ -33,8 +33,8 @@ const geniusClient = new Client(process.env.GENIUS_ACCESS_TOKEN || '');
 // Game state
 let gameState = {
   currentSong: null,
-  players: {},
-  scores: {},
+  players: {}, // socketId -> playerName
+  scores: {}, // playerName -> score (persistent)
   isPlaying: false,
   currentPlaylist: null,
   accessToken: null,
@@ -42,7 +42,11 @@ let gameState = {
     artist: false,
     title: false,
     lyrics: false
-  }
+  },
+  trackStatus: {}, // Track status for each song: 'unplayed', 'played', 'partial', 'complete'
+  bonusAwarded: false, // Track if bonus point has been awarded for current song
+  playersWhoGuessed: new Set(), // Track which players have made correct guesses this round
+  activeUsernames: new Set() // Track which usernames are currently connected
 };
 
 // Function to fetch lyrics from Genius
@@ -120,6 +124,17 @@ function normalizeArtist(artist) {
     .replace(/[^\w\s]/g, '') // Remove special characters
     .replace(/\s+/g, ' ') // Replace multiple spaces with single space
     .trim();
+}
+
+// Function to update track status
+function updateTrackStatus(trackId, status) {
+  gameState.trackStatus[trackId] = status;
+  console.log(`Track ${trackId} status updated to: ${status}`);
+}
+
+// Function to get track status
+function getTrackStatus(trackId) {
+  return gameState.trackStatus[trackId] || 'unplayed';
 }
 
 // Function to fetch all tracks from a playlist (handles pagination)
@@ -228,6 +243,15 @@ app.post('/api/playlist', async (req, res) => {
     
     gameState.currentPlaylist = completePlaylist;
     
+    // Initialize track status for all tracks
+    allTracks.forEach(item => {
+      if (item.track && item.track.id) {
+        gameState.trackStatus[item.track.id] = 'unplayed';
+      }
+    });
+    
+    console.log(`Initialized track status for ${allTracks.length} tracks`);
+    
     res.json({ success: true, playlist: completePlaylist });
   } catch (error) {
     console.error('Error fetching playlist:', error);
@@ -282,6 +306,12 @@ app.post('/api/play', async (req, res) => {
       title: false,
       lyrics: false
     };
+    // Reset bonus flag and player tracking for new song
+    gameState.bonusAwarded = false;
+    gameState.playersWhoGuessed.clear();
+    
+    // Mark track as played
+    updateTrackStatus(track.body.id, 'played');
     
     // Notify all clients about new song
     console.log('Emitting newSong event to all clients:', songData);
@@ -343,6 +373,34 @@ app.post('/api/resume', async (req, res) => {
 app.post('/api/reset-scores', (req, res) => {
   gameState.scores = {};
   io.emit('scoresReset');
+  res.json({ success: true });
+});
+
+app.get('/api/track-status', (req, res) => {
+  res.json({ success: true, trackStatus: gameState.trackStatus });
+});
+
+app.post('/api/reset-playlist', (req, res) => {
+  // Reset all track status to unplayed
+  Object.keys(gameState.trackStatus).forEach(trackId => {
+    gameState.trackStatus[trackId] = 'unplayed';
+  });
+  
+  // Reset current song and guessed parts
+  gameState.currentSong = null;
+  gameState.guessedParts = {
+    artist: false,
+    title: false,
+    lyrics: false
+  };
+  gameState.isPlaying = false;
+  gameState.bonusAwarded = false;
+  gameState.playersWhoGuessed.clear();
+  gameState.activeUsernames.clear();
+  
+  // Notify all clients
+  io.emit('playlistReset');
+  
   res.json({ success: true });
 });
 
@@ -422,9 +480,34 @@ io.on('connection', (socket) => {
   
   // Player joins
   socket.on('playerJoin', (playerName) => {
-    console.log(`👤 Player joined: ${playerName} (socket: ${socket.id})`);
+    console.log(`👤 Player attempting to join: ${playerName} (socket: ${socket.id})`);
+    
+    // Check if username is already taken by another active player
+    if (gameState.activeUsernames.has(playerName)) {
+      // Check if this is a reconnection (same username, different socket)
+      const existingSocketId = Object.keys(gameState.players).find(socketId => 
+        gameState.players[socketId] === playerName
+      );
+      
+      if (existingSocketId && existingSocketId !== socket.id) {
+        // Username is taken by another active player
+        socket.emit('usernameTaken', { error: 'Username is already taken by another player' });
+        console.log(`❌ Username "${playerName}" rejected - already taken by another player`);
+        return;
+      }
+    }
+    
+    // Username is available or this is a reconnection
     gameState.players[socket.id] = playerName;
-    gameState.scores[playerName] = gameState.scores[playerName] || 0;
+    gameState.activeUsernames.add(playerName);
+    
+    // Initialize score if this is a new player, otherwise keep existing score
+    if (!gameState.scores[playerName]) {
+      gameState.scores[playerName] = 0;
+      console.log(`🆕 New player "${playerName}" joined with 0 points`);
+    } else {
+      console.log(`🔄 Player "${playerName}" reconnected with ${gameState.scores[playerName]} points`);
+    }
     
     io.emit('playerJoined', { playerName, players: gameState.players, scores: gameState.scores });
     console.log(`📊 Updated players:`, gameState.players);
@@ -502,15 +585,39 @@ io.on('connection', (socket) => {
     }
     
     if (correctParts.length > 0) {
+      // Track that this player made a correct guess
+      gameState.playersWhoGuessed.add(playerName);
+      
+      // Award bonus point if this player just completed all parts, bonus hasn't been awarded yet,
+      // and this is the only player who has made correct guesses this round
+      let bonusAwarded = false;
+      if (allPartsGuessed && !gameState.bonusAwarded && gameState.playersWhoGuessed.size === 1) {
+        gameState.scores[playerName]++;
+        gameState.bonusAwarded = true;
+        bonusAwarded = true;
+        console.log(`🏆 ${playerName} earned a bonus point for completing all parts alone!`);
+      }
+      
+      // Update track status based on guessing progress
+      if (gameState.currentSong && gameState.currentSong.id) {
+        const currentStatus = getTrackStatus(gameState.currentSong.id);
+        if (currentStatus === 'played' && !allPartsGuessed) {
+          updateTrackStatus(gameState.currentSong.id, 'partial');
+        } else if (allPartsGuessed) {
+          updateTrackStatus(gameState.currentSong.id, 'complete');
+        }
+      }
+      
       io.emit('correctGuess', { 
         playerName, 
         players: gameState.players, 
         scores: gameState.scores,
         guessedParts: gameState.guessedParts,
         correctParts,
-        allPartsGuessed
+        allPartsGuessed,
+        bonusAwarded
       });
-      console.log(`✅ ${playerName} earned ${correctParts.length} point(s) for: ${correctParts.join(', ')}`);
+      console.log(`✅ ${playerName} earned ${correctParts.length} point(s) for: ${correctParts.join(', ')}${bonusAwarded ? ' + 1 bonus point' : ''}`);
     } else {
       socket.emit('incorrectGuess');
     }
@@ -521,9 +628,19 @@ io.on('connection', (socket) => {
     const playerName = gameState.players[socket.id];
     if (playerName) {
       delete gameState.players[socket.id];
+      
+      // Check if this username is still used by other active players
+      const usernameStillActive = Object.values(gameState.players).includes(playerName);
+      if (!usernameStillActive) {
+        gameState.activeUsernames.delete(playerName);
+        console.log(`👋 Player "${playerName}" disconnected (username now available)`);
+      } else {
+        console.log(`👋 Player "${playerName}" disconnected (username still in use by another connection)`);
+      }
+      
       io.emit('playerLeft', { playerName, players: gameState.players, scores: gameState.scores });
-      console.log(`Player left: ${playerName}`);
       console.log(`📊 Updated players:`, gameState.players);
+      console.log(`📊 Scores remain persistent:`, gameState.scores);
     }
   });
 });
