@@ -57,32 +57,54 @@ let gameState = {
 // Function to fetch lyrics from Genius
 async function fetchLyrics(artistName, songTitle) {
   try {
+    console.log('🎵 Starting lyrics fetch process...');
+    console.log(`📝 Searching for: "${songTitle}" by "${artistName}"`);
+    
     if (!process.env.GENIUS_ACCESS_TOKEN) {
-      console.log('No Genius access token provided, skipping lyrics fetch');
+      console.log('❌ No Genius access token provided, skipping lyrics fetch');
+      console.log('💡 To enable lyrics, add GENIUS_ACCESS_TOKEN to your .env file');
       return null;
     }
 
-    console.log(`Searching for lyrics: ${songTitle} by ${artistName}`);
+    console.log('✅ Genius access token found');
+    console.log(`🔍 Searching Genius for: "${songTitle} ${artistName}"`);
     
     // Search for the song on Genius
     const searches = await geniusClient.songs.search(`${songTitle} ${artistName}`);
     
+    console.log(`📊 Found ${searches.length} search results on Genius`);
+    
     if (searches.length === 0) {
-      console.log('No songs found on Genius');
+      console.log('❌ No songs found on Genius');
       return null;
     }
     
     // Get the first (most relevant) result
     const song = searches[0];
-    console.log(`Found song on Genius: ${song.title} by ${song.artist.name}`);
+    console.log(`🎯 Selected result: "${song.title}" by "${song.artist.name}"`);
+    console.log(`🔗 Genius URL: ${song.url}`);
     
     // Fetch the lyrics
+    console.log('📖 Fetching lyrics from Genius...');
     const lyrics = await song.lyrics();
-    console.log(`Successfully fetched lyrics (${lyrics.length} characters)`);
+    
+    if (!lyrics || lyrics.trim().length === 0) {
+      console.log('❌ No lyrics content found');
+      return null;
+    }
+    
+    console.log(`✅ Successfully fetched lyrics (${lyrics.length} characters)`);
+    console.log(`📄 Lyrics preview: "${lyrics.substring(0, 100)}..."`);
     
     return lyrics;
   } catch (error) {
-    console.error('Error fetching lyrics from Genius:', error);
+    console.error('❌ Error fetching lyrics from Genius:', error);
+    console.error('🔍 Error details:', {
+      message: error.message,
+      stack: error.stack,
+      artistName,
+      songTitle
+    });
     return null;
   }
 }
@@ -438,6 +460,20 @@ app.get('/api/devices', async (req, res) => {
     console.error('Error getting devices:', error);
     res.status(500).json({ error: 'Failed to get devices' });
   }
+});
+
+// Debug endpoint for lyrics configuration
+app.get('/api/debug/lyrics', (req, res) => {
+  const hasGeniusToken = !!process.env.GENIUS_ACCESS_TOKEN;
+  const geniusTokenLength = process.env.GENIUS_ACCESS_TOKEN ? process.env.GENIUS_ACCESS_TOKEN.length : 0;
+  
+  res.json({
+    success: true,
+    hasGeniusToken,
+    geniusTokenLength,
+    geniusTokenConfigured: hasGeniusToken && geniusTokenLength > 0,
+    message: hasGeniusToken ? 'Genius API token is configured' : 'Genius API token is not configured'
+  });
 });
 
 // Get current playback position

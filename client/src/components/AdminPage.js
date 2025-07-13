@@ -120,6 +120,20 @@ const AdminPage = () => {
       setCurrentGuesses(data.currentGuesses);
     });
 
+    newSocket.on('newSong', (song) => {
+      console.log('Admin: New song received:', song);
+      console.log('Admin: Lyrics debug:', {
+        hasLyrics: !!song.lyrics,
+        lyricsLength: song.lyrics ? song.lyrics.length : 0,
+        lyricsPreview: song.lyrics ? song.lyrics.substring(0, 100) : 'No lyrics',
+        lyricsType: typeof song.lyrics
+      });
+      setCurrentTrack(song);
+      setIsPlaying(true);
+      setGuessedParts({ artist: false, title: false, lyrics: false });
+      setCurrentGuesses({ artist: [], title: [], lyrics: [] });
+    });
+
     return () => {
       newSocket.close();
     };
@@ -159,6 +173,17 @@ const AdminPage = () => {
     }
   };
 
+  const checkLyricsConfig = async () => {
+    try {
+      const response = await axios.get('/api/debug/lyrics');
+      console.log('Lyrics configuration:', response.data);
+      alert(`Lyrics Configuration:\n${response.data.message}\nToken length: ${response.data.geniusTokenLength}`);
+    } catch (error) {
+      console.error('Error checking lyrics config:', error);
+      alert('Failed to check lyrics configuration');
+    }
+  };
+
   const authenticateSpotify = async () => {
     try {
       const response = await axios.get('/auth/spotify');
@@ -191,8 +216,22 @@ const AdminPage = () => {
 
   const playTrack = async (track) => {
     try {
-      await axios.post('/api/play', { trackUri: track.uri });
-      setCurrentTrack(track);
+      console.log('Admin: Playing track:', track);
+      const response = await axios.post('/api/play', { trackUri: track.uri });
+      console.log('Admin: Play response:', response.data);
+      
+      if (response.data.song) {
+        console.log('Admin: Song data received:', response.data.song);
+        console.log('Admin: Lyrics in response:', {
+          hasLyrics: !!response.data.song.lyrics,
+          lyricsLength: response.data.song.lyrics ? response.data.song.lyrics.length : 0,
+          lyricsPreview: response.data.song.lyrics ? response.data.song.lyrics.substring(0, 100) : 'No lyrics'
+        });
+        setCurrentTrack(response.data.song);
+      } else {
+        setCurrentTrack(track);
+      }
+      
       setIsPlaying(true);
       setError('');
       // Update track status after playing
@@ -519,9 +558,14 @@ const AdminPage = () => {
               <strong>Title:</strong> {currentTrack.name}
             </div>
             <div className="answer-item">
-              <strong>Lyrics:</strong> <em>Players need to guess lyrics from the song</em>
+              <strong>Lyrics:</strong> 
+              {currentTrack.lyrics ? (
+                <em>Lyrics available - players can guess lyrics from the song</em>
+              ) : (
+                <em>Lyrics not available - players cannot guess lyrics for this song</em>
+              )}
             </div>
-            {currentTrack.lyrics && currentTrack.lyrics !== `Lyrics not available for ${currentTrack.name} by ${currentTrack.artists[0]}` && (
+            {currentTrack.lyrics && currentTrack.lyrics.length > 0 && (
               <div className="lyrics-preview">
                 <strong>Lyrics Preview:</strong>
                 <div className="lyrics-text">
@@ -598,8 +642,11 @@ const AdminPage = () => {
           Make sure you have Spotify open and ready to play music.
         </p>
         <div className="flex-center">
-          <button className="btn btn-secondary" onClick={checkDevices}>
+          <button className="btn btn-secondary" onClick={checkDevices} style={{ marginRight: '10px' }}>
             Check Available Devices
+          </button>
+          <button className="btn btn-secondary" onClick={checkLyricsConfig}>
+            Check Lyrics Config
           </button>
         </div>
         
