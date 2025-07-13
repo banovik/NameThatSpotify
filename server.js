@@ -27,8 +27,10 @@ const spotifyApi = new SpotifyWebApi({
   redirectUri: process.env.SPOTIFY_REDIRECT_URI
 });
 
-// Genius API configuration
-const geniusClient = new Client(process.env.GENIUS_ACCESS_TOKEN || '');
+// Genius API configuration with custom User-Agent for production
+const geniusClient = new Client(process.env.GENIUS_ACCESS_TOKEN || '', {
+  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+});
 
 // Game state
 let gameState = {
@@ -54,7 +56,7 @@ let gameState = {
   } // Track all guesses for current song: { guess: string, player: string, timestamp: Date }
 };
 
-// Function to fetch lyrics from Genius
+// Function to fetch lyrics from Genius with fallback
 async function fetchLyrics(artistName, songTitle) {
   try {
     console.log('🎵 Starting lyrics fetch process...');
@@ -105,6 +107,42 @@ async function fetchLyrics(artistName, songTitle) {
       artistName,
       songTitle
     });
+    
+    // Check if it's a 403 error (common in production)
+    if (error.message && error.message.includes('403')) {
+      console.log('🚫 403 Forbidden error detected - this is common in production environments');
+      console.log('💡 Possible causes:');
+      console.log('   - User-Agent restrictions');
+      console.log('   - IP address blocking');
+      console.log('   - Rate limiting');
+      console.log('   - Token permissions');
+      console.log('🔧 Trying fallback lyrics service...');
+      
+      // Try fallback service (Musixmatch-like approach)
+      return await fetchLyricsFallback(artistName, songTitle);
+    }
+    
+    return null;
+  }
+}
+
+// Fallback lyrics fetching function
+async function fetchLyricsFallback(artistName, songTitle) {
+  try {
+    console.log('🔄 Trying fallback lyrics service...');
+    
+    // For now, return a placeholder message
+    // In the future, you could integrate with other lyrics APIs like:
+    // - Musixmatch API
+    // - Lyrics.ovh API
+    // - Custom web scraping (with proper rate limiting)
+    
+    const fallbackMessage = `Lyrics for "${songTitle}" by "${artistName}" are not available in this environment. This is likely due to API restrictions in production. Players can still guess artist and title for points.`;
+    
+    console.log('📝 Using fallback lyrics message');
+    return fallbackMessage;
+  } catch (fallbackError) {
+    console.error('❌ Fallback lyrics service also failed:', fallbackError);
     return null;
   }
 }
@@ -526,6 +564,66 @@ app.get('/api/debug/genius-test', async (req, res) => {
       success: false,
       error: error.message,
       message: 'Genius API test failed',
+      stack: error.stack
+    });
+  }
+});
+
+// Detailed Genius API diagnostics endpoint
+app.get('/api/debug/genius-diagnostics', async (req, res) => {
+  try {
+    console.log('🔍 Running Genius API diagnostics...');
+    
+    const diagnostics = {
+      tokenConfigured: !!process.env.GENIUS_ACCESS_TOKEN,
+      tokenLength: process.env.GENIUS_ACCESS_TOKEN ? process.env.GENIUS_ACCESS_TOKEN.length : 0,
+      tokenPreview: process.env.GENIUS_ACCESS_TOKEN ? process.env.GENIUS_ACCESS_TOKEN.substring(0, 10) + '...' : 'No token',
+      environment: process.env.NODE_ENV || 'development',
+      serverTime: new Date().toISOString(),
+      userAgent: req.get('User-Agent'),
+      clientIP: req.ip || req.connection.remoteAddress,
+      geniusClientType: typeof geniusClient,
+      geniusClientConstructor: geniusClient.constructor.name
+    };
+    
+    // Test different search terms to see if it's specific to certain searches
+    const testTerms = ['test', 'hello', 'a'];
+    const searchResults = {};
+    
+    for (const term of testTerms) {
+      try {
+        console.log(`🔍 Testing search term: "${term}"`);
+        const searches = await geniusClient.songs.search(term);
+        searchResults[term] = {
+          success: true,
+          resultsFound: searches.length,
+          firstResult: searches.length > 0 ? {
+            title: searches[0].title,
+            artist: searches[0].artist.name
+          } : null
+        };
+      } catch (error) {
+        searchResults[term] = {
+          success: false,
+          error: error.message,
+          statusCode: error.statusCode || 'unknown'
+        };
+      }
+    }
+    
+    diagnostics.searchResults = searchResults;
+    
+    res.json({
+      success: true,
+      diagnostics
+    });
+    
+  } catch (error) {
+    console.error('❌ Genius diagnostics failed:', error);
+    res.json({
+      success: false,
+      error: error.message,
+      message: 'Genius diagnostics failed',
       stack: error.stack
     });
   }

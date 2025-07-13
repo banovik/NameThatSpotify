@@ -214,6 +214,37 @@ const AdminPage = () => {
     }
   };
 
+  const runGeniusDiagnostics = async () => {
+    try {
+      const response = await axios.get('/api/debug/genius-diagnostics');
+      console.log('Genius diagnostics:', response.data);
+      if (response.data.success) {
+        const diag = response.data.diagnostics;
+        let message = `Genius Diagnostics:\n\n`;
+        message += `Environment: ${diag.environment}\n`;
+        message += `Token configured: ${diag.tokenConfigured}\n`;
+        message += `Token length: ${diag.tokenLength}\n`;
+        message += `Server time: ${diag.serverTime}\n\n`;
+        message += `Search Results:\n`;
+        
+        Object.entries(diag.searchResults).forEach(([term, result]) => {
+          if (result.success) {
+            message += `"${term}": ${result.resultsFound} results\n`;
+          } else {
+            message += `"${term}": FAILED (${result.statusCode}) - ${result.error}\n`;
+          }
+        });
+        
+        alert(message);
+      } else {
+        alert(`Genius Diagnostics: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
+      }
+    } catch (error) {
+      console.error('Error running Genius diagnostics:', error);
+      alert('Failed to run Genius diagnostics');
+    }
+  };
+
   const authenticateSpotify = async () => {
     try {
       const response = await axios.get('/auth/spotify');
@@ -680,6 +711,9 @@ const AdminPage = () => {
           </button>
           <button className="btn btn-secondary" onClick={testGeniusAPI} style={{ marginRight: '10px' }}>
             Test Genius API
+          </button>
+          <button className="btn btn-secondary" onClick={runGeniusDiagnostics} style={{ marginRight: '10px' }}>
+            Genius Diagnostics
           </button>
           <button className="btn btn-secondary" onClick={testLyricsFetching}>
             Test Lyrics Fetching
