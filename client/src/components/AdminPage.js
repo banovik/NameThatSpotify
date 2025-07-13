@@ -189,13 +189,28 @@ const AdminPage = () => {
       const response = await axios.get('/api/debug/test-lyrics');
       console.log('Lyrics test:', response.data);
       if (response.data.success) {
-        alert(`Lyrics Test: SUCCESS!\n\nSong: ${response.data.testSong} by ${response.data.testArtist}\nLyrics length: ${response.data.lyricsLength}\n\nPreview:\n${response.data.lyricsPreview}`);
+        alert(`Lyrics Test: SUCCESS!\n\nSong: ${response.data.testSong} by ${response.data.testArtist}\nLyrics length: ${response.data.lyricsLength}\nSearch results: ${response.data.searchResults}\nSelected: ${response.data.selectedSong} by ${response.data.selectedArtist}\n\nPreview:\n${response.data.lyricsPreview}`);
       } else {
-        alert(`Lyrics Test: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
+        alert(`Lyrics Test: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}\nSearch results: ${response.data.searchResults || 'N/A'}\nSelected song: ${response.data.selectedSong || 'N/A'}`);
       }
     } catch (error) {
       console.error('Error testing lyrics:', error);
       alert('Failed to test lyrics fetching');
+    }
+  };
+
+  const testGeniusAPI = async () => {
+    try {
+      const response = await axios.get('/api/debug/genius-test');
+      console.log('Genius API test:', response.data);
+      if (response.data.success) {
+        alert(`Genius API Test: SUCCESS!\n\nSearch term: ${response.data.searchTerm}\nResults found: ${response.data.resultsFound}\nFirst result: ${response.data.firstResult ? `${response.data.firstResult.title} by ${response.data.firstResult.artist}` : 'None'}`);
+      } else {
+        alert(`Genius API Test: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
+      }
+    } catch (error) {
+      console.error('Error testing Genius API:', error);
+      alert('Failed to test Genius API');
     }
   };
 
@@ -662,6 +677,9 @@ const AdminPage = () => {
           </button>
           <button className="btn btn-secondary" onClick={checkLyricsConfig} style={{ marginRight: '10px' }}>
             Check Lyrics Config
+          </button>
+          <button className="btn btn-secondary" onClick={testGeniusAPI} style={{ marginRight: '10px' }}>
+            Test Genius API
           </button>
           <button className="btn btn-secondary" onClick={testLyricsFetching}>
             Test Lyrics Fetching

@@ -484,8 +484,51 @@ app.get('/api/debug/lyrics', (req, res) => {
     geniusTokenPreview,
     geniusTokenConfigured: hasGeniusToken && geniusTokenLength > 0,
     message: hasGeniusToken ? 'Genius API token is configured' : 'Genius API token is not configured',
-    envVarsWithGenius: Object.keys(process.env).filter(key => key.includes('GENIUS'))
+    envVarsWithGenius: Object.keys(process.env).filter(key => key.includes('GENIUS')),
+    geniusClientType: typeof geniusClient,
+    geniusClientConstructor: geniusClient.constructor.name
   });
+});
+
+// Simple Genius API test endpoint
+app.get('/api/debug/genius-test', async (req, res) => {
+  try {
+    console.log('🧪 Simple Genius API test...');
+    
+    if (!process.env.GENIUS_ACCESS_TOKEN) {
+      return res.json({
+        success: false,
+        error: 'No Genius API token configured'
+      });
+    }
+    
+    // Test basic search functionality
+    const searchTerm = 'test';
+    console.log(`🔍 Testing search with term: "${searchTerm}"`);
+    
+    const searches = await geniusClient.songs.search(searchTerm);
+    
+    res.json({
+      success: true,
+      message: 'Genius API is working',
+      searchTerm,
+      resultsFound: searches.length,
+      firstResult: searches.length > 0 ? {
+        title: searches[0].title,
+        artist: searches[0].artist.name,
+        url: searches[0].url
+      } : null
+    });
+    
+  } catch (error) {
+    console.error('❌ Genius API test failed:', error);
+    res.json({
+      success: false,
+      error: error.message,
+      message: 'Genius API test failed',
+      stack: error.stack
+    });
+  }
 });
 
 // Test lyrics fetching endpoint
@@ -506,25 +549,68 @@ app.get('/api/debug/test-lyrics', async (req, res) => {
     const testSong = 'Shake It Off';
     
     console.log(`🧪 Testing with: "${testSong}" by "${testArtist}"`);
+    console.log(`🔑 Using Genius token: ${process.env.GENIUS_ACCESS_TOKEN.substring(0, 10)}...`);
     
-    const lyrics = await fetchLyrics(testArtist, testSong);
-    
-    if (lyrics) {
-      res.json({
-        success: true,
-        message: 'Lyrics fetching is working!',
-        testArtist,
-        testSong,
-        lyricsLength: lyrics.length,
-        lyricsPreview: lyrics.substring(0, 200) + '...'
-      });
-    } else {
+    // Test the Genius client directly
+    try {
+      console.log('🔍 Testing Genius client search...');
+      const searches = await geniusClient.songs.search(`${testSong} ${testArtist}`);
+      console.log(`📊 Search results: ${searches.length} songs found`);
+      
+      if (searches.length > 0) {
+        const song = searches[0];
+        console.log(`🎯 First result: "${song.title}" by "${song.artist.name}"`);
+        console.log(`🔗 URL: ${song.url}`);
+        
+        console.log('📖 Attempting to fetch lyrics...');
+        const lyrics = await song.lyrics();
+        
+        if (lyrics && lyrics.trim().length > 0) {
+          console.log(`✅ Lyrics fetched successfully (${lyrics.length} characters)`);
+          res.json({
+            success: true,
+            message: 'Lyrics fetching is working!',
+            testArtist,
+            testSong,
+            lyricsLength: lyrics.length,
+            lyricsPreview: lyrics.substring(0, 200) + '...',
+            searchResults: searches.length,
+            selectedSong: song.title,
+            selectedArtist: song.artist.name
+          });
+        } else {
+          console.log('❌ Lyrics content is empty or null');
+          res.json({
+            success: false,
+            message: 'Lyrics fetching failed - empty content',
+            testArtist,
+            testSong,
+            error: 'No lyrics content returned from Genius API',
+            searchResults: searches.length,
+            selectedSong: song.title,
+            selectedArtist: song.artist.name
+          });
+        }
+      } else {
+        console.log('❌ No search results found');
+        res.json({
+          success: false,
+          message: 'Lyrics fetching failed - no search results',
+          testArtist,
+          testSong,
+          error: 'No songs found in Genius search',
+          searchResults: 0
+        });
+      }
+    } catch (geniusError) {
+      console.error('❌ Genius API error:', geniusError);
       res.json({
         success: false,
-        message: 'Lyrics fetching failed',
+        message: 'Genius API error',
         testArtist,
         testSong,
-        error: 'No lyrics returned from Genius API'
+        error: geniusError.message,
+        stack: geniusError.stack
       });
     }
   } catch (error) {
@@ -532,7 +618,8 @@ app.get('/api/debug/test-lyrics', async (req, res) => {
     res.json({
       success: false,
       error: error.message,
-      message: 'Lyrics fetching test failed'
+      message: 'Lyrics fetching test failed',
+      stack: error.stack
     });
   }
 });
