@@ -177,10 +177,25 @@ const AdminPage = () => {
     try {
       const response = await axios.get('/api/debug/lyrics');
       console.log('Lyrics configuration:', response.data);
-      alert(`Lyrics Configuration:\n${response.data.message}\nToken length: ${response.data.geniusTokenLength}`);
+      alert(`Lyrics Configuration:\n${response.data.message}\nToken length: ${response.data.geniusTokenLength}\nToken preview: ${response.data.geniusTokenPreview}`);
     } catch (error) {
       console.error('Error checking lyrics config:', error);
       alert('Failed to check lyrics configuration');
+    }
+  };
+
+  const testLyricsFetching = async () => {
+    try {
+      const response = await axios.get('/api/debug/test-lyrics');
+      console.log('Lyrics test:', response.data);
+      if (response.data.success) {
+        alert(`Lyrics Test: SUCCESS!\n\nSong: ${response.data.testSong} by ${response.data.testArtist}\nLyrics length: ${response.data.lyricsLength}\n\nPreview:\n${response.data.lyricsPreview}`);
+      } else {
+        alert(`Lyrics Test: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
+      }
+    } catch (error) {
+      console.error('Error testing lyrics:', error);
+      alert('Failed to test lyrics fetching');
     }
   };
 
@@ -645,8 +660,11 @@ const AdminPage = () => {
           <button className="btn btn-secondary" onClick={checkDevices} style={{ marginRight: '10px' }}>
             Check Available Devices
           </button>
-          <button className="btn btn-secondary" onClick={checkLyricsConfig}>
+          <button className="btn btn-secondary" onClick={checkLyricsConfig} style={{ marginRight: '10px' }}>
             Check Lyrics Config
+          </button>
+          <button className="btn btn-secondary" onClick={testLyricsFetching}>
+            Test Lyrics Fetching
           </button>
         </div>
         

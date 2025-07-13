@@ -466,14 +466,75 @@ app.get('/api/devices', async (req, res) => {
 app.get('/api/debug/lyrics', (req, res) => {
   const hasGeniusToken = !!process.env.GENIUS_ACCESS_TOKEN;
   const geniusTokenLength = process.env.GENIUS_ACCESS_TOKEN ? process.env.GENIUS_ACCESS_TOKEN.length : 0;
+  const geniusTokenPreview = process.env.GENIUS_ACCESS_TOKEN ? 
+    `${process.env.GENIUS_ACCESS_TOKEN.substring(0, 10)}...` : 'No token';
+  
+  console.log('🔍 Lyrics debug endpoint called');
+  console.log('🔑 Genius token status:', {
+    hasToken: hasGeniusToken,
+    tokenLength: geniusTokenLength,
+    tokenPreview: geniusTokenPreview,
+    allEnvVars: Object.keys(process.env).filter(key => key.includes('GENIUS'))
+  });
   
   res.json({
     success: true,
     hasGeniusToken,
     geniusTokenLength,
+    geniusTokenPreview,
     geniusTokenConfigured: hasGeniusToken && geniusTokenLength > 0,
-    message: hasGeniusToken ? 'Genius API token is configured' : 'Genius API token is not configured'
+    message: hasGeniusToken ? 'Genius API token is configured' : 'Genius API token is not configured',
+    envVarsWithGenius: Object.keys(process.env).filter(key => key.includes('GENIUS'))
   });
+});
+
+// Test lyrics fetching endpoint
+app.get('/api/debug/test-lyrics', async (req, res) => {
+  try {
+    console.log('🧪 Testing lyrics fetching...');
+    
+    if (!process.env.GENIUS_ACCESS_TOKEN) {
+      return res.json({
+        success: false,
+        error: 'No Genius API token configured',
+        message: 'Add GENIUS_ACCESS_TOKEN to your .env file'
+      });
+    }
+    
+    // Test with a well-known song
+    const testArtist = 'Taylor Swift';
+    const testSong = 'Shake It Off';
+    
+    console.log(`🧪 Testing with: "${testSong}" by "${testArtist}"`);
+    
+    const lyrics = await fetchLyrics(testArtist, testSong);
+    
+    if (lyrics) {
+      res.json({
+        success: true,
+        message: 'Lyrics fetching is working!',
+        testArtist,
+        testSong,
+        lyricsLength: lyrics.length,
+        lyricsPreview: lyrics.substring(0, 200) + '...'
+      });
+    } else {
+      res.json({
+        success: false,
+        message: 'Lyrics fetching failed',
+        testArtist,
+        testSong,
+        error: 'No lyrics returned from Genius API'
+      });
+    }
+  } catch (error) {
+    console.error('🧪 Test lyrics error:', error);
+    res.json({
+      success: false,
+      error: error.message,
+      message: 'Lyrics fetching test failed'
+    });
+  }
 });
 
 // Get current playback position
