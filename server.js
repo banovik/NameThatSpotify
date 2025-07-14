@@ -52,7 +52,8 @@ let gameState = {
     artist: [],
     title: [],
     lyrics: []
-  } // Track all guesses for current song: { guess: string, player: string, timestamp: Date }
+  }, // Track all guesses for current song: { guess: string, player: string, timestamp: Date }
+  lastGuessTimestamps: {}, // playerName -> timestamp of last guess (ms)
 };
 
 // Function to fetch lyrics from lyrics.ovh API
@@ -766,7 +767,17 @@ io.on('connection', (socket) => {
   socket.on('makeGuess', (guess) => {
     const playerName = gameState.players[socket.id];
     if (!playerName || !gameState.currentSong) return;
-    
+
+    // --- RATE LIMITING: 1 guess per second per player ---
+    const now = Date.now();
+    const lastGuess = gameState.lastGuessTimestamps[playerName] || 0;
+    if (now - lastGuess < 1000) {
+      socket.emit('validationError', { error: 'You can only guess once per second. Please wait a moment.' });
+      return;
+    }
+    gameState.lastGuessTimestamps[playerName] = now;
+    // --- END RATE LIMITING ---
+
     const { artist, title, lyrics } = guess;
     let correctParts = [];
     let allPartsGuessed = true;
@@ -941,6 +952,8 @@ io.on('connection', (socket) => {
     const playerName = gameState.players[socket.id];
     if (playerName) {
       delete gameState.players[socket.id];
+      // Clean up last guess timestamp
+      delete gameState.lastGuessTimestamps[playerName];
       
       // Check if this username is still used by other active players
       const usernameStillActive = Object.values(gameState.players).includes(playerName);

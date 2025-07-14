@@ -288,7 +288,7 @@ const AdminPage = () => {
       await getTrackStatus();
       setError('');
     } catch (error) {
-      setError('Failed to load playlist. Please check the URL and try again.');
+      setError('Failed to load playlist. Please check the URL and try again. Please ensure that the playlist is public and that it is not created by Spotify or a bot.');
       console.error('Playlist error:', error);
     } finally {
       setLoading(false);
@@ -560,7 +560,7 @@ const AdminPage = () => {
             <input
               type="url"
               className="input"
-              placeholder="Enter Spotify playlist URL"
+              placeholder="Enter the URL of a public, user-created Spotify playlist"
               value={playlistUrl}
               onChange={(e) => setPlaylistUrl(e.target.value)}
               required
@@ -768,7 +768,7 @@ const AdminPage = () => {
           <li>Make sure you have Spotify open in another tab.</li>
           <li>Play a song on that tab, so that authentication is verified.</li>
           <li>Click the "Connect Spotify Account" button to initialize OAuth in this tab.</li>
-          <li>Enter a public Spotify playlist URL in the "Playlist Management" section.</li>
+          <li>Enter a public, user-created Spotify playlist URL in the "Playlist Management" section.</li>
           <li>Once the playlist loads, click "Play" on any track to start playing it.</li>
           <li>Players will then be able to begin guessing song details.</li>
         </ul>
