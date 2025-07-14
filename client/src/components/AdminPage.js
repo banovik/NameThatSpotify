@@ -126,12 +126,32 @@ const AdminPage = () => {
         hasLyrics: !!song.lyrics,
         lyricsLength: song.lyrics ? song.lyrics.length : 0,
         lyricsPreview: song.lyrics ? song.lyrics.substring(0, 100) : 'No lyrics',
-        lyricsType: typeof song.lyrics
+        lyricsType: typeof song.lyrics,
+        lyricsAvailable: song.lyricsAvailable
       });
       setCurrentTrack(song);
       setIsPlaying(true);
-      setGuessedParts({ artist: false, title: false, lyrics: false });
-      setCurrentGuesses({ artist: [], title: [], lyrics: [] });
+      
+      // Check if this song has any previous progress
+      const hasProgress = song.guessedParts && (
+        song.guessedParts.artist || 
+        song.guessedParts.title || 
+        song.guessedParts.lyrics === true
+      );
+      
+      const isCompleted = song.guessedParts && 
+        song.guessedParts.artist && 
+        song.guessedParts.title && 
+        (song.guessedParts.lyrics === true || song.guessedParts.lyrics === null);
+      
+      setGuessedParts(song.guessedParts || { artist: false, title: false, lyrics: false });
+      setCurrentGuesses(song.currentGuesses || { artist: [], title: [], lyrics: [] });
+      
+      if (isCompleted) {
+        console.log('Admin: Song is already completed, guessing disabled');
+      } else if (hasProgress) {
+        console.log('Admin: Song has partial progress, some guessing disabled');
+      }
     });
 
     return () => {
@@ -177,7 +197,7 @@ const AdminPage = () => {
     try {
       const response = await axios.get('/api/debug/lyrics');
       console.log('Lyrics configuration:', response.data);
-      alert(`Lyrics Configuration:\n${response.data.message}\nToken length: ${response.data.geniusTokenLength}\nToken preview: ${response.data.geniusTokenPreview}`);
+      alert(`Lyrics Configuration:\n${response.data.message}\nService: ${response.data.lyricsService}\nBase URL: ${response.data.baseUrl}`);
     } catch (error) {
       console.error('Error checking lyrics config:', error);
       alert('Failed to check lyrics configuration');
@@ -189,9 +209,9 @@ const AdminPage = () => {
       const response = await axios.get('/api/debug/test-lyrics');
       console.log('Lyrics test:', response.data);
       if (response.data.success) {
-        alert(`Lyrics Test: SUCCESS!\n\nSong: ${response.data.testSong} by ${response.data.testArtist}\nLyrics length: ${response.data.lyricsLength}\nSearch results: ${response.data.searchResults}\nSelected: ${response.data.selectedSong} by ${response.data.selectedArtist}\n\nPreview:\n${response.data.lyricsPreview}`);
+        alert(`Lyrics Test: SUCCESS!\n\nSong: ${response.data.testSong} by ${response.data.testArtist}\nLyrics length: ${response.data.lyricsLength}\n\nPreview:\n${response.data.lyricsPreview}`);
       } else {
-        alert(`Lyrics Test: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}\nSearch results: ${response.data.searchResults || 'N/A'}\nSelected song: ${response.data.selectedSong || 'N/A'}`);
+        alert(`Lyrics Test: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
       }
     } catch (error) {
       console.error('Error testing lyrics:', error);
@@ -199,49 +219,49 @@ const AdminPage = () => {
     }
   };
 
-  const testGeniusAPI = async () => {
+  const testLyricsAPI = async () => {
     try {
-      const response = await axios.get('/api/debug/genius-test');
-      console.log('Genius API test:', response.data);
+      const response = await axios.get('/api/debug/lyrics-test');
+      console.log('Lyrics API test:', response.data);
       if (response.data.success) {
-        alert(`Genius API Test: SUCCESS!\n\nSearch term: ${response.data.searchTerm}\nResults found: ${response.data.resultsFound}\nFirst result: ${response.data.firstResult ? `${response.data.firstResult.title} by ${response.data.firstResult.artist}` : 'None'}`);
+        alert(`Lyrics API Test: SUCCESS!\n\nSong: ${response.data.testSong} by ${response.data.testArtist}\nLyrics length: ${response.data.lyricsLength}\n\nPreview:\n${response.data.lyricsPreview}`);
       } else {
-        alert(`Genius API Test: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
+        alert(`Lyrics API Test: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
       }
     } catch (error) {
-      console.error('Error testing Genius API:', error);
-      alert('Failed to test Genius API');
+      console.error('Error testing lyrics API:', error);
+      alert('Failed to test lyrics API');
     }
   };
 
-  const runGeniusDiagnostics = async () => {
+  const runLyricsDiagnostics = async () => {
     try {
-      const response = await axios.get('/api/debug/genius-diagnostics');
-      console.log('Genius diagnostics:', response.data);
+      const response = await axios.get('/api/debug/lyrics-diagnostics');
+      console.log('Lyrics diagnostics:', response.data);
       if (response.data.success) {
         const diag = response.data.diagnostics;
-        let message = `Genius Diagnostics:\n\n`;
+        let message = `Lyrics Diagnostics:\n\n`;
+        message += `Service: ${diag.lyricsService}\n`;
+        message += `Base URL: ${diag.baseUrl}\n`;
         message += `Environment: ${diag.environment}\n`;
-        message += `Token configured: ${diag.tokenConfigured}\n`;
-        message += `Token length: ${diag.tokenLength}\n`;
         message += `Server time: ${diag.serverTime}\n\n`;
-        message += `Search Results:\n`;
+        message += `Test Results:\n`;
         
-        Object.entries(diag.searchResults).forEach(([term, result]) => {
+        Object.entries(diag.testResults).forEach(([song, result]) => {
           if (result.success) {
-            message += `"${term}": ${result.resultsFound} results\n`;
+            message += `"${song}": SUCCESS (${result.lyricsLength} chars)\n`;
           } else {
-            message += `"${term}": FAILED (${result.statusCode}) - ${result.error}\n`;
+            message += `"${song}": FAILED (${result.status || 'unknown'}) - ${result.error}\n`;
           }
         });
         
         alert(message);
       } else {
-        alert(`Genius Diagnostics: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
+        alert(`Lyrics Diagnostics: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
       }
     } catch (error) {
-      console.error('Error running Genius diagnostics:', error);
-      alert('Failed to run Genius diagnostics');
+      console.error('Error running lyrics diagnostics:', error);
+      alert('Failed to run lyrics diagnostics');
     }
   };
 
@@ -334,6 +354,13 @@ const AdminPage = () => {
   };
 
   const resetScores = async () => {
+    // Show confirmation dialog
+    const confirmed = window.confirm('Are you sure you want to reset all player scores?');
+    
+    if (!confirmed) {
+      return; // User cancelled
+    }
+    
     try {
       await axios.post('/api/reset-scores');
       setScores({});
@@ -345,6 +372,13 @@ const AdminPage = () => {
   };
 
   const selectNewPlaylist = () => {
+    // Show confirmation dialog
+    const confirmed = window.confirm('Are you sure you want to select a new playlist? This will clear the current playlist and stop the current song.');
+    
+    if (!confirmed) {
+      return; // User cancelled
+    }
+    
     setPlaylist(null);
     setTracks([]);
     setCurrentTrack(null);
@@ -403,6 +437,21 @@ const AdminPage = () => {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
+  // Format artists array
+  const formatArtists = (artists) => {
+    if (Array.isArray(artists)) {
+      // If it's an array of strings, join them
+      if (typeof artists[0] === 'string') {
+        return artists.join(', ');
+      }
+      // If it's an array of objects with name property
+      if (artists[0] && typeof artists[0] === 'object' && artists[0].name) {
+        return artists.map(a => a.name).join(', ');
+      }
+    }
+    return 'Unknown Artist';
+  };
+
   // Get track status
   const getTrackStatus = async () => {
     try {
@@ -417,6 +466,13 @@ const AdminPage = () => {
 
   // Reset playlist
   const resetPlaylist = async () => {
+    // Show confirmation dialog
+    const confirmed = window.confirm('Are you sure you want to reset the playlist? This will clear all track progress and stop the current song.');
+    
+    if (!confirmed) {
+      return; // User cancelled
+    }
+    
     try {
       await axios.post('/api/reset-playlist');
       setTrackStatus({});
@@ -559,7 +615,7 @@ const AdminPage = () => {
           <h2 className="subtitle">Now Playing</h2>
           <div className="now-playing">
             <h3>{currentTrack.name}</h3>
-            <p>by {currentTrack.artists.map(a => a.name).join(', ')}</p>
+            <p>by {formatArtists(currentTrack.artists)}</p>
             <p>Album: {currentTrack.album.name}</p>
             
             {/* Progress Indicator */}
@@ -574,7 +630,7 @@ const AdminPage = () => {
               </div>
               <div className="progress-item">
                 <span className={`progress-dot ${guessedParts.lyrics ? 'guessed' : ''}`}>📝</span>
-                <span className="progress-label">Lyrics {guessedParts.lyrics ? '✓' : ''}</span>
+                <span className="progress-label">Lyrics {guessedParts.lyrics ? '✓' : currentTrack?.lyricsAvailable === false ? '✗' : ''}</span>
               </div>
             </div>
             
@@ -613,21 +669,21 @@ const AdminPage = () => {
           <h2 className="subtitle">Correct Answers</h2>
           <div className="correct-answers">
             <div className="answer-item">
-              <strong>Artist:</strong> {currentTrack.artists.map(a => a.name).join(', ')}
+              <strong>Artist:</strong> {formatArtists(currentTrack.artists)}
             </div>
             <div className="answer-item">
               <strong>Title:</strong> {currentTrack.name}
             </div>
             <div className="answer-item">
-              <strong>Lyrics:</strong> 
-              {currentTrack.lyrics ? (
+              <strong>Lyrics Availability:</strong> 
+              {currentTrack.lyricsAvailable ? (
                 <em>Lyrics available - players can guess lyrics from the song</em>
               ) : (
                 <em>Lyrics not available - players cannot guess lyrics for this song</em>
               )}
             </div>
-            {currentTrack.lyrics && currentTrack.lyrics.length > 0 && (
-              <div className="lyrics-preview">
+            {currentTrack.lyricsAvailable && currentTrack.lyrics && currentTrack.lyrics.length > 0 && (
+              <div className="answer-item">
                 <strong>Lyrics Preview:</strong>
                 <div className="lyrics-text">
                   {currentTrack.lyrics.substring(0, 200)}...
@@ -659,14 +715,36 @@ const AdminPage = () => {
         </div>
       )}
 
+      {/* Player Leaderboard */}
+      <div className="card">
+        <h2 className="subtitle">Leaderboard</h2>
+        <div className="flex-between mb-20">
+          <button className="btn btn-secondary" onClick={resetScores}>
+            Reset Scores
+          </button>
+        </div>
+        
+        {Object.keys(scores || {}).length > 0 ? (
+          <div className="player-list">
+            {Object.entries(scores || {})
+              .sort(([,a], [,b]) => b - a)
+              .map(([name, score]) => (
+                <div key={name} className="player-item">
+                  <span>{name}</span>
+                  <span className="score">{score} points</span>
+                </div>
+              ))}
+          </div>
+        ) : (
+          <p className="text-center">No scores yet.</p>
+        )}
+      </div>
+
       {/* Player Tracking */}
       <div className="card">
         <h2 className="subtitle">Connected Players</h2>
         <div className="flex-between mb-20">
           <span>Total Players: {Object.keys(players).length}</span>
-          <button className="btn btn-secondary" onClick={resetScores}>
-            Reset Scores
-          </button>
         </div>
         
         {Object.keys(players).length > 0 ? (
@@ -687,33 +765,30 @@ const AdminPage = () => {
       <div className="card">
         <h2 className="subtitle">Admin Instructions</h2>
         <ul>
-          <li>Load a Spotify playlist using the URL</li>
-          <li>Click "Play" on any track to start playing it</li>
-          <li>Players will be able to guess the song details</li>
-          <li>Monitor player scores in real-time</li>
-          <li>Use "Reset Scores" to start a new round</li>
-          <li>Select a new playlist anytime to change the game</li>
+          <li>Make sure you have Spotify open in another tab.</li>
+          <li>Play a song on that tab, so that authentication is verified.</li>
+          <li>Click the "Connect Spotify Account" button to initialize OAuth in this tab.</li>
+          <li>Enter a public Spotify playlist URL in the "Playlist Management" section.</li>
+          <li>Once the playlist loads, click "Play" on any track to start playing it.</li>
+          <li>Players will then be able to begin guessing song details.</li>
         </ul>
       </div>
 
-            {/* Spotify Device Check */}
+            {/* Troubleshooting Tools */}
             <div className="card">
-        <h2 className="subtitle">Spotify Device Status</h2>
-        <p className="text-center mb-20">
-          Make sure you have Spotify open and ready to play music.
-        </p>
+        <h2 className="subtitle">Troubleshooting Tools</h2>
         <div className="flex-center">
           <button className="btn btn-secondary" onClick={checkDevices} style={{ marginRight: '10px' }}>
-            Check Available Devices
+            Check Spotify Devices
           </button>
           <button className="btn btn-secondary" onClick={checkLyricsConfig} style={{ marginRight: '10px' }}>
             Check Lyrics Config
           </button>
-          <button className="btn btn-secondary" onClick={testGeniusAPI} style={{ marginRight: '10px' }}>
-            Test Genius API
+          <button className="btn btn-secondary" onClick={testLyricsAPI} style={{ marginRight: '10px' }}>
+            Test Lyrics API
           </button>
-          <button className="btn btn-secondary" onClick={runGeniusDiagnostics} style={{ marginRight: '10px' }}>
-            Genius Diagnostics
+          <button className="btn btn-secondary" onClick={runLyricsDiagnostics} style={{ marginRight: '10px' }}>
+            Lyrics Diagnostics
           </button>
           <button className="btn btn-secondary" onClick={testLyricsFetching}>
             Test Lyrics Fetching

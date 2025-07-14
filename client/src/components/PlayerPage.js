@@ -17,6 +17,7 @@ const PlayerPage = () => {
   const [canGuess, setCanGuess] = useState(true);
   const [lyricsLetterCount, setLyricsLetterCount] = useState(0);
   const [guessedParts, setGuessedParts] = useState({ artist: false, title: false, lyrics: false });
+  const [lyricsAvailable, setLyricsAvailable] = useState(true);
   const [activeInput, setActiveInput] = useState('title'); // Track which input should be focused
   
   // Refs for input elements
@@ -69,10 +70,33 @@ const PlayerPage = () => {
       console.log('Received new song:', song);
       setCurrentSong(song);
       setIsPlaying(true);
-      setCanGuess(true);
-      setGuessedParts({ artist: false, title: false, lyrics: false });
-      setMessage('New song started! Start guessing!');
-      setMessageType('success');
+      setLyricsAvailable(song.lyricsAvailable !== false);
+      
+      // Check if this song has any previous progress
+      const hasProgress = song.guessedParts && (
+        song.guessedParts.artist || 
+        song.guessedParts.title || 
+        song.guessedParts.lyrics === true
+      );
+      
+      const isCompleted = song.guessedParts && 
+        song.guessedParts.artist && 
+        song.guessedParts.title && 
+        (song.guessedParts.lyrics === true || song.guessedParts.lyrics === null);
+      
+      setGuessedParts(song.guessedParts || { artist: false, title: false, lyrics: false });
+      setCanGuess(!isCompleted);
+      
+      if (isCompleted) {
+        setMessage('This song has already been completed! All parts have been guessed.', 'info');
+        setMessageType('info');
+      } else if (hasProgress) {
+        setMessage('This song has partial progress! Some parts have already been guessed.', 'info');
+        setMessageType('info');
+      } else {
+        setMessage('New song started! Start guessing!');
+        setMessageType('success');
+      }
     });
 
     newSocket.on('playbackPaused', () => {
@@ -256,7 +280,7 @@ const PlayerPage = () => {
             </div>
             <div className="progress-item">
               <span className={`progress-dot ${guessedParts.lyrics ? 'guessed' : ''}`}>📝</span>
-              <span className="progress-label">Lyrics {guessedParts.lyrics ? '✓' : ''}</span>
+              <span className="progress-label">Lyrics {guessedParts.lyrics ? '✓' : !lyricsAvailable ? '✗' : ''}</span>
             </div>
           </div>
           
@@ -285,13 +309,13 @@ const PlayerPage = () => {
                   <input
                     ref={lyricsInputRef}
                     type="text"
-                    className={`input ${guessedParts.lyrics ? 'disabled' : ''} ${lyricsLetterCount > 0 && lyricsLetterCount < 12 ? 'input-warning' : ''}`}
-                    placeholder={guessedParts.lyrics ? "Lyrics already guessed ✓" : "Lyrics (min 12 letters)"}
+                    className={`input ${guessedParts.lyrics ? 'disabled' : ''} ${!lyricsAvailable ? 'disabled' : ''} ${lyricsLetterCount > 0 && lyricsLetterCount < 12 ? 'input-warning' : ''}`}
+                    placeholder={guessedParts.lyrics ? "Lyrics already guessed ✓" : !lyricsAvailable ? "Lyrics not available ✗" : "Lyrics (min 12 letters)"}
                     value={guess.lyrics}
                     onChange={(e) => handleInputChange('lyrics', e.target.value)}
-                    disabled={guessedParts.lyrics}
+                    disabled={guessedParts.lyrics || !lyricsAvailable}
                   />
-                  {guess.lyrics && !guessedParts.lyrics && (
+                  {guess.lyrics && !guessedParts.lyrics && lyricsAvailable && (
                     <div className="letter-count">
                       {lyricsLetterCount}/12 letters
                     </div>
@@ -366,16 +390,16 @@ const PlayerPage = () => {
       <div className="card">
         <h2 className="subtitle">How to Play</h2>
         <ul>
-          <li>Listen to the music being played by the admin</li>
-          <li>Guess the song title, artist, and any lyrics</li>
-          <li>Song titles: Parentheses and special characters are ignored</li>
-          <li>Artist names: Special characters are ignored</li>
-          <li>Lyrics guesses must be at least 12 letters long</li>
+          <li>Listen to the music being played by the admin.</li>
+          <li>Guess the song title, artist, and any lyrics.</li>
+          <li>Song titles: Parentheses and special characters are ignored.</li>
+          <li>Artist names: All special characters are ignored.</li>
+          <li>Lyrics guesses must be at least 12 letters long.</li>
           <li>Punctuation and special characters are ignored in lyrics</li>
-          <li>You only need to get one correct to earn a point</li>
-          <li>Once someone guesses correctly, the round ends</li>
-          <li>Wait for the next song to start guessing again</li>
-          <li>Compete with other players for the highest score!</li>
+          <li>Each correct guess earns one point.</li>
+          <li>If you guess all three items correctly, you earn one bonus point!</li>
+          <li>Once all items are guessed correctly, guessing for that song is disabled</li>
+          <li>When a new song starts, you can begin guessing again.</li>
         </ul>
       </div>
 

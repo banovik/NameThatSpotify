@@ -3,7 +3,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const SpotifyWebApi = require('spotify-web-api-node');
-const { Client } = require('genius-lyrics');
+const axios = require('axios');
 require('dotenv').config();
 
 const app = express();
@@ -27,10 +27,8 @@ const spotifyApi = new SpotifyWebApi({
   redirectUri: process.env.SPOTIFY_REDIRECT_URI
 });
 
-// Genius API configuration with custom User-Agent for production
-const geniusClient = new Client(process.env.GENIUS_ACCESS_TOKEN || '', {
-  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-});
+// Lyrics.ovh API configuration (no authentication required)
+const LYRICS_OVH_BASE_URL = 'https://api.lyrics.ovh/v1';
 
 // Game state
 let gameState = {
@@ -46,6 +44,7 @@ let gameState = {
     lyrics: false
   },
   trackStatus: {}, // Track status for each song: 'unplayed', 'played', 'partial', 'complete'
+  songStates: {}, // Persistent state for each song: { isComplete, lyricsGuessed, bonusAwarded, playersWhoGuessed, currentGuesses }
   bonusAwarded: false, // Track if bonus point has been awarded for current song
   playersWhoGuessed: new Set(), // Track which players have made correct guesses this round
   activeUsernames: new Set(), // Track which usernames are currently connected
@@ -56,106 +55,60 @@ let gameState = {
   } // Track all guesses for current song: { guess: string, player: string, timestamp: Date }
 };
 
-// Function to fetch lyrics from Genius with fallback
+// Function to fetch lyrics from lyrics.ovh API
 async function fetchLyrics(artistName, songTitle) {
   try {
     console.log('🎵 Starting lyrics fetch process...');
     console.log(`📝 Searching for: "${songTitle}" by "${artistName}"`);
     
-    if (!process.env.GENIUS_ACCESS_TOKEN) {
-      console.log('❌ No Genius access token provided, skipping lyrics fetch');
-      console.log('💡 To enable lyrics, add GENIUS_ACCESS_TOKEN to your .env file');
-      return null;
-    }
-
-    console.log('✅ Genius access token found');
-    console.log(`🔍 Searching Genius for: "${songTitle} ${artistName}"`);
+    // Clean and encode the artist and song names for the API
+    const cleanArtist = encodeURIComponent(artistName.trim());
+    const cleanSong = encodeURIComponent(songTitle.trim());
     
-    // Search for the song on Genius
-    const searches = await geniusClient.songs.search(`${songTitle} ${artistName}`);
+    console.log(`🔍 Fetching from lyrics.ovh: ${cleanArtist}/${cleanSong}`);
     
-    console.log(`📊 Found ${searches.length} search results on Genius`);
+    // Make request to lyrics.ovh API
+    const response = await axios.get(`${LYRICS_OVH_BASE_URL}/${cleanArtist}/${cleanSong}`, {
+      timeout: 10000, // 10 second timeout
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
     
-    if (searches.length === 0) {
-      console.log('❌ No songs found on Genius');
-      return null;
-    }
-    
-    // Get the first (most relevant) result
-    const song = searches[0];
-    console.log(`🎯 Selected result: "${song.title}" by "${song.artist.name}"`);
-    console.log(`🔗 Genius URL: ${song.url}`);
-    
-    // Try to fetch lyrics with multiple approaches
-    console.log('📖 Attempting to fetch lyrics...');
-    
-    // Approach 1: Try the standard lyrics() method
-    try {
-      const lyrics = await song.lyrics();
-      if (lyrics && lyrics.trim().length > 0) {
+    if (response.data && response.data.lyrics) {
+      const lyrics = response.data.lyrics.trim();
+      if (lyrics.length > 0) {
         console.log(`✅ Successfully fetched lyrics (${lyrics.length} characters)`);
         console.log(`📄 Lyrics preview: "${lyrics.substring(0, 100)}..."`);
         return lyrics;
       }
-    } catch (lyricsError) {
-      console.log('❌ Standard lyrics method failed:', lyricsError.message);
     }
     
-    // Approach 2: Try to get lyrics from the song URL directly
-    try {
-      console.log('🔄 Trying alternative lyrics fetching method...');
-      const songData = await song.fetch();
-      if (songData && songData.lyrics) {
-        console.log(`✅ Successfully fetched lyrics via alternative method (${songData.lyrics.length} characters)`);
-        return songData.lyrics;
-      }
-    } catch (altError) {
-      console.log('❌ Alternative lyrics method failed:', altError.message);
-    }
-    
-    console.log('❌ All lyrics fetching methods failed');
+    console.log('❌ No lyrics found in response');
     return null;
     
   } catch (error) {
-    console.error('❌ Error fetching lyrics from Genius:', error);
+    console.error('❌ Error fetching lyrics from lyrics.ovh:', error);
     console.error('🔍 Error details:', {
       message: error.message,
-      stack: error.stack,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
       artistName,
       songTitle
     });
     
-    // Check if it's a 403 error (common in production)
-    if (error.message && error.message.includes('403')) {
-      console.log('🚫 403 Forbidden error detected - this is common in production environments');
-      console.log('💡 The search API works but lyrics fetching is blocked');
-      console.log('🔧 Using fallback lyrics service...');
-      
-      // Try fallback service
-      return await fetchLyricsFallback(artistName, songTitle);
+    // Check if it's a 404 (song not found)
+    if (error.response?.status === 404) {
+      console.log('❌ Song not found in lyrics.ovh database');
+      return null;
     }
     
-    return null;
-  }
-}
-
-// Fallback lyrics fetching function
-async function fetchLyricsFallback(artistName, songTitle) {
-  try {
-    console.log('🔄 Trying fallback lyrics service...');
+    // Check if it's a timeout or network error
+    if (error.code === 'ECONNABORTED' || error.code === 'ENOTFOUND') {
+      console.log('❌ Network error or timeout');
+      return null;
+    }
     
-    // For now, return a placeholder message
-    // In the future, you could integrate with other lyrics APIs like:
-    // - Musixmatch API
-    // - Lyrics.ovh API
-    // - Custom web scraping (with proper rate limiting)
-    
-    const fallbackMessage = `Lyrics for "${songTitle}" by "${artistName}" are not available in this environment. This is likely due to API restrictions in production. Players can still guess artist and title for points.`;
-    
-    console.log('📝 Using fallback lyrics message');
-    return fallbackMessage;
-  } catch (fallbackError) {
-    console.error('❌ Fallback lyrics service also failed:', fallbackError);
     return null;
   }
 }
@@ -363,7 +316,7 @@ app.post('/api/play', async (req, res) => {
     const trackId = trackUri.split(':')[2];
     const track = await spotifyApi.getTrack(trackId);
     
-    // Fetch lyrics from Genius
+    // Fetch lyrics from lyrics.ovh
     const artistName = track.body.artists[0].name;
     const songTitle = track.body.name;
     const lyrics = await fetchLyrics(artistName, songTitle);
@@ -374,34 +327,74 @@ app.post('/api/play', async (req, res) => {
       artists: track.body.artists.map(artist => artist.name),
       album: track.body.album.name,
       uri: track.body.uri,
-      lyrics: lyrics || `Lyrics not available for ${songTitle} by ${artistName}`
+      lyrics: lyrics,
+      lyricsAvailable: !!lyrics && lyrics.trim().length > 0
     };
     
-    gameState.currentSong = songData;
-    // Reset guessed parts for new song
-    gameState.guessedParts = {
-      artist: false,
-      title: false,
-      lyrics: false
-    };
-    // Reset bonus flag and player tracking for new song
-    gameState.bonusAwarded = false;
-    gameState.playersWhoGuessed.clear();
-    // Clear all guesses for new song
-    gameState.currentGuesses = {
-      artist: [],
-      title: [],
-      lyrics: []
-    };
+    // Check if this song has been played before and get its previous state
+    const previousSongState = gameState.songStates && gameState.songStates[songData.id];
     
-    // Mark track as played
-    updateTrackStatus(track.body.id, 'played');
+    if (previousSongState) {
+      // Song was played before, restore its previous state (complete or partial)
+      gameState.currentSong = songData;
+      gameState.guessedParts = {
+        artist: previousSongState.guessedParts?.artist || false,
+        title: previousSongState.guessedParts?.title || false,
+        lyrics: previousSongState.guessedParts?.lyrics || false
+      };
+      // Set lyrics as unavailable if no lyrics were fetched
+      if (!songData.lyricsAvailable) {
+        gameState.guessedParts.lyrics = null; // null means unavailable
+      }
+      gameState.bonusAwarded = previousSongState.bonusAwarded || false;
+      gameState.playersWhoGuessed = new Set(previousSongState.playersWhoGuessed || []);
+      gameState.currentGuesses = previousSongState.currentGuesses || { artist: [], title: [], lyrics: [] };
+      
+      if (previousSongState.isComplete) {
+        console.log(`🔄 Restoring completed state for song: ${songData.name}`);
+      } else {
+        console.log(`🔄 Restoring partial state for song: ${songData.name} - Artist: ${gameState.guessedParts.artist}, Title: ${gameState.guessedParts.title}, Lyrics: ${gameState.guessedParts.lyrics}`);
+      }
+    } else {
+      // New song, start fresh
+      gameState.currentSong = songData;
+      // Reset guessed parts for new song
+      gameState.guessedParts = {
+        artist: false,
+        title: false,
+        lyrics: false
+      };
+      // Set lyrics as unavailable if no lyrics were fetched
+      if (!songData.lyricsAvailable) {
+        gameState.guessedParts.lyrics = null; // null means unavailable
+      }
+      // Reset bonus flag and player tracking for new song
+      gameState.bonusAwarded = false;
+      gameState.playersWhoGuessed.clear();
+      // Clear all guesses for new song
+      gameState.currentGuesses = {
+        artist: [],
+        title: [],
+        lyrics: []
+      };
+    }
+    
+    // Mark track as played (but don't override 'complete' or 'partial' status)
+    const currentStatus = getTrackStatus(track.body.id);
+    if (currentStatus !== 'complete' && currentStatus !== 'partial') {
+      updateTrackStatus(track.body.id, 'played');
+    }
     
     // Notify all clients about new song
-    console.log('Emitting newSong event to all clients:', songData);
-    io.emit('newSong', songData);
+    const songDataWithState = {
+      ...songData,
+      guessedParts: gameState.guessedParts,
+      currentGuesses: gameState.currentGuesses
+    };
+    console.log('Emitting newSong event to all clients:', songDataWithState);
+    io.emit('newSong', songDataWithState);
     
-    // Emit empty guesses for new song
+    // Emit guesses for new song
     io.emit('guessesUpdated', {
       currentGuesses: gameState.currentGuesses
     });
@@ -475,6 +468,9 @@ app.post('/api/reset-playlist', (req, res) => {
     gameState.trackStatus[trackId] = 'unplayed';
   });
   
+  // Clear all persistent song states
+  gameState.songStates = {};
+  
   // Reset current song and guessed parts
   gameState.currentSong = null;
   gameState.guessedParts = {
@@ -491,6 +487,8 @@ app.post('/api/reset-playlist', (req, res) => {
     title: [],
     lyrics: []
   };
+  
+  console.log('🔄 Playlist reset - cleared all song states');
   
   // Notify all clients
   io.emit('playlistReset');
@@ -515,116 +513,101 @@ app.get('/api/devices', async (req, res) => {
 
 // Debug endpoint for lyrics configuration
 app.get('/api/debug/lyrics', (req, res) => {
-  const hasGeniusToken = !!process.env.GENIUS_ACCESS_TOKEN;
-  const geniusTokenLength = process.env.GENIUS_ACCESS_TOKEN ? process.env.GENIUS_ACCESS_TOKEN.length : 0;
-  const geniusTokenPreview = process.env.GENIUS_ACCESS_TOKEN ? 
-    `${process.env.GENIUS_ACCESS_TOKEN.substring(0, 10)}...` : 'No token';
-  
   console.log('🔍 Lyrics debug endpoint called');
-  console.log('🔑 Genius token status:', {
-    hasToken: hasGeniusToken,
-    tokenLength: geniusTokenLength,
-    tokenPreview: geniusTokenPreview,
-    allEnvVars: Object.keys(process.env).filter(key => key.includes('GENIUS'))
-  });
   
   res.json({
     success: true,
-    hasGeniusToken,
-    geniusTokenLength,
-    geniusTokenPreview,
-    geniusTokenConfigured: hasGeniusToken && geniusTokenLength > 0,
-    message: hasGeniusToken ? 'Genius API token is configured' : 'Genius API token is not configured',
-    envVarsWithGenius: Object.keys(process.env).filter(key => key.includes('GENIUS')),
-    geniusClientType: typeof geniusClient,
-    geniusClientConstructor: geniusClient.constructor.name
+    lyricsService: 'lyrics.ovh',
+    baseUrl: LYRICS_OVH_BASE_URL,
+    message: 'Lyrics.ovh API is configured (no authentication required)',
+    environment: process.env.NODE_ENV || 'development',
+    serverTime: new Date().toISOString()
   });
 });
 
-// Simple Genius API test endpoint
-app.get('/api/debug/genius-test', async (req, res) => {
+// Simple lyrics.ovh API test endpoint
+app.get('/api/debug/lyrics-test', async (req, res) => {
   try {
-    console.log('🧪 Simple Genius API test...');
+    console.log('🧪 Simple lyrics.ovh API test...');
     
-    if (!process.env.GENIUS_ACCESS_TOKEN) {
-      return res.json({
+    // Test with a well-known song
+    const testArtist = 'Queen';
+    const testSong = 'Bohemian Rhapsody';
+    
+    console.log(`🔍 Testing with: "${testSong}" by "${testArtist}"`);
+    
+    const lyrics = await fetchLyrics(testArtist, testSong);
+    
+    if (lyrics) {
+      res.json({
+        success: true,
+        message: 'Lyrics.ovh API is working!',
+        testArtist,
+        testSong,
+        lyricsLength: lyrics.length,
+        lyricsPreview: lyrics.substring(0, 200) + '...'
+      });
+    } else {
+      res.json({
         success: false,
-        error: 'No Genius API token configured'
+        message: 'Lyrics fetching failed',
+        testArtist,
+        testSong,
+        error: 'No lyrics returned from lyrics.ovh API'
       });
     }
-    
-    // Test basic search functionality
-    const searchTerm = 'test';
-    console.log(`🔍 Testing search with term: "${searchTerm}"`);
-    
-    const searches = await geniusClient.songs.search(searchTerm);
-    
-    res.json({
-      success: true,
-      message: 'Genius API is working',
-      searchTerm,
-      resultsFound: searches.length,
-      firstResult: searches.length > 0 ? {
-        title: searches[0].title,
-        artist: searches[0].artist.name,
-        url: searches[0].url
-      } : null
-    });
-    
   } catch (error) {
-    console.error('❌ Genius API test failed:', error);
+    console.error('❌ Lyrics.ovh API test failed:', error);
     res.json({
       success: false,
       error: error.message,
-      message: 'Genius API test failed',
+      message: 'Lyrics.ovh API test failed',
       stack: error.stack
     });
   }
 });
 
-// Detailed Genius API diagnostics endpoint
-app.get('/api/debug/genius-diagnostics', async (req, res) => {
+// Detailed lyrics.ovh API diagnostics endpoint
+app.get('/api/debug/lyrics-diagnostics', async (req, res) => {
   try {
-    console.log('🔍 Running Genius API diagnostics...');
+    console.log('🔍 Running lyrics.ovh API diagnostics...');
     
     const diagnostics = {
-      tokenConfigured: !!process.env.GENIUS_ACCESS_TOKEN,
-      tokenLength: process.env.GENIUS_ACCESS_TOKEN ? process.env.GENIUS_ACCESS_TOKEN.length : 0,
-      tokenPreview: process.env.GENIUS_ACCESS_TOKEN ? process.env.GENIUS_ACCESS_TOKEN.substring(0, 10) + '...' : 'No token',
+      lyricsService: 'lyrics.ovh',
+      baseUrl: LYRICS_OVH_BASE_URL,
       environment: process.env.NODE_ENV || 'development',
       serverTime: new Date().toISOString(),
       userAgent: req.get('User-Agent'),
-      clientIP: req.ip || req.connection.remoteAddress,
-      geniusClientType: typeof geniusClient,
-      geniusClientConstructor: geniusClient.constructor.name
+      clientIP: req.ip || req.connection.remoteAddress
     };
     
-    // Test different search terms to see if it's specific to certain searches
-    const testTerms = ['test', 'hello', 'a'];
-    const searchResults = {};
+    // Test different songs to see success rate
+    const testSongs = [
+      { artist: 'Queen', song: 'Bohemian Rhapsody' },
+      { artist: 'The Beatles', song: 'Hey Jude' },
+      { artist: 'Michael Jackson', song: 'Billie Jean' }
+    ];
+    const testResults = {};
     
-    for (const term of testTerms) {
+    for (const test of testSongs) {
       try {
-        console.log(`🔍 Testing search term: "${term}"`);
-        const searches = await geniusClient.songs.search(term);
-        searchResults[term] = {
-          success: true,
-          resultsFound: searches.length,
-          firstResult: searches.length > 0 ? {
-            title: searches[0].title,
-            artist: searches[0].artist.name
-          } : null
+        console.log(`🔍 Testing: "${test.song}" by "${test.artist}"`);
+        const lyrics = await fetchLyrics(test.artist, test.song);
+        testResults[`${test.artist} - ${test.song}`] = {
+          success: !!lyrics,
+          lyricsLength: lyrics ? lyrics.length : 0,
+          hasLyrics: !!lyrics
         };
       } catch (error) {
-        searchResults[term] = {
+        testResults[`${test.artist} - ${test.song}`] = {
           success: false,
           error: error.message,
-          statusCode: error.statusCode || 'unknown'
+          status: error.response?.status
         };
       }
     }
     
-    diagnostics.searchResults = searchResults;
+    diagnostics.testResults = testResults;
     
     res.json({
       success: true,
@@ -632,11 +615,11 @@ app.get('/api/debug/genius-diagnostics', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Genius diagnostics failed:', error);
+    console.error('❌ Lyrics.ovh diagnostics failed:', error);
     res.json({
       success: false,
       error: error.message,
-      message: 'Genius diagnostics failed',
+      message: 'Lyrics.ovh diagnostics failed',
       stack: error.stack
     });
   }
@@ -647,81 +630,30 @@ app.get('/api/debug/test-lyrics', async (req, res) => {
   try {
     console.log('🧪 Testing lyrics fetching...');
     
-    if (!process.env.GENIUS_ACCESS_TOKEN) {
-      return res.json({
-        success: false,
-        error: 'No Genius API token configured',
-        message: 'Add GENIUS_ACCESS_TOKEN to your .env file'
-      });
-    }
-    
     // Test with a well-known song
-    const testArtist = 'Taylor Swift';
-    const testSong = 'Shake It Off';
+    const testArtist = 'Queen';
+    const testSong = 'Bohemian Rhapsody';
     
     console.log(`🧪 Testing with: "${testSong}" by "${testArtist}"`);
-    console.log(`🔑 Using Genius token: ${process.env.GENIUS_ACCESS_TOKEN.substring(0, 10)}...`);
     
-    // Test the Genius client directly
-    try {
-      console.log('🔍 Testing Genius client search...');
-      const searches = await geniusClient.songs.search(`${testSong} ${testArtist}`);
-      console.log(`📊 Search results: ${searches.length} songs found`);
-      
-      if (searches.length > 0) {
-        const song = searches[0];
-        console.log(`🎯 First result: "${song.title}" by "${song.artist.name}"`);
-        console.log(`🔗 URL: ${song.url}`);
-        
-        console.log('📖 Attempting to fetch lyrics...');
-        const lyrics = await song.lyrics();
-        
-        if (lyrics && lyrics.trim().length > 0) {
-          console.log(`✅ Lyrics fetched successfully (${lyrics.length} characters)`);
-          res.json({
-            success: true,
-            message: 'Lyrics fetching is working!',
-            testArtist,
-            testSong,
-            lyricsLength: lyrics.length,
-            lyricsPreview: lyrics.substring(0, 200) + '...',
-            searchResults: searches.length,
-            selectedSong: song.title,
-            selectedArtist: song.artist.name
-          });
-        } else {
-          console.log('❌ Lyrics content is empty or null');
-          res.json({
-            success: false,
-            message: 'Lyrics fetching failed - empty content',
-            testArtist,
-            testSong,
-            error: 'No lyrics content returned from Genius API',
-            searchResults: searches.length,
-            selectedSong: song.title,
-            selectedArtist: song.artist.name
-          });
-        }
-      } else {
-        console.log('❌ No search results found');
-        res.json({
-          success: false,
-          message: 'Lyrics fetching failed - no search results',
-          testArtist,
-          testSong,
-          error: 'No songs found in Genius search',
-          searchResults: 0
-        });
-      }
-    } catch (geniusError) {
-      console.error('❌ Genius API error:', geniusError);
+    const lyrics = await fetchLyrics(testArtist, testSong);
+    
+    if (lyrics) {
       res.json({
-        success: false,
-        message: 'Genius API error',
+        success: true,
+        message: 'Lyrics fetching is working!',
         testArtist,
         testSong,
-        error: geniusError.message,
-        stack: geniusError.stack
+        lyricsLength: lyrics.length,
+        lyricsPreview: lyrics.substring(0, 200) + '...'
+      });
+    } else {
+      res.json({
+        success: false,
+        message: 'Lyrics fetching failed',
+        testArtist,
+        testSong,
+        error: 'No lyrics returned from lyrics.ovh API'
       });
     }
   } catch (error) {
@@ -898,30 +830,66 @@ io.on('connection', (socket) => {
     }
     
     // Check lyrics guess
-    if (lyrics && !gameState.guessedParts.lyrics) {
-      // Check minimum length requirement (12 letters)
-      const letterCount = countLetters(lyrics);
-      if (letterCount < 12) {
-        validationError = `Lyrics guess must be at least 12 letters long (you have ${letterCount})`;
-        socket.emit('validationError', { error: validationError });
-        return;
+    if (lyrics && gameState.guessedParts.lyrics !== null) {
+      // Check if lyrics are available for guessing
+      if (!gameState.guessedParts.lyrics) {
+        // Check minimum length requirement (12 letters)
+        const letterCount = countLetters(lyrics);
+        if (letterCount < 12) {
+          validationError = `Lyrics guess must be at least 12 letters long (you have ${letterCount})`;
+          socket.emit('validationError', { error: validationError });
+          return;
+        }
+        
+        // Normalize both the lyrics and the guess for comparison
+        const normalizedLyrics = normalizeText(gameState.currentSong.lyrics);
+        const normalizedGuess = normalizeText(lyrics);
+        
+        if (normalizedLyrics.includes(normalizedGuess)) {
+          gameState.guessedParts.lyrics = true;
+          gameState.scores[playerName]++;
+          correctParts.push('lyrics');
+          console.log(`📝 Lyrics guessed correctly by ${playerName}: ${lyrics}`);
+        }
       }
-      
-      // Normalize both the lyrics and the guess for comparison
-      const normalizedLyrics = normalizeText(gameState.currentSong.lyrics);
-      const normalizedGuess = normalizeText(lyrics);
-      
-      if (normalizedLyrics.includes(normalizedGuess)) {
-        gameState.guessedParts.lyrics = true;
-        gameState.scores[playerName]++;
-        correctParts.push('lyrics');
-        console.log(`📝 Lyrics guessed correctly by ${playerName}: ${lyrics}`);
-      }
+    } else if (lyrics && gameState.guessedParts.lyrics === null) {
+      // Lyrics are not available, inform the player
+      socket.emit('validationError', { error: 'Lyrics are not available for this song. You cannot guess lyrics.' });
+      return;
     }
     
-    // Check if all parts have been guessed
-    if (!gameState.guessedParts.artist || !gameState.guessedParts.title || !gameState.guessedParts.lyrics) {
+    // Check if all available parts have been guessed
+    const artistGuessed = gameState.guessedParts.artist;
+    const titleGuessed = gameState.guessedParts.title;
+    const lyricsGuessed = gameState.guessedParts.lyrics === true; // true means guessed, false means not guessed, null means unavailable
+    
+    if (!artistGuessed || !titleGuessed || (gameState.guessedParts.lyrics !== null && !lyricsGuessed)) {
       allPartsGuessed = false;
+    }
+    
+    // Save the song state for persistence (both partial and complete)
+    if (gameState.currentSong) {
+      const isComplete = allPartsGuessed;
+      gameState.songStates[gameState.currentSong.id] = {
+        isComplete: isComplete,
+        guessedParts: { ...gameState.guessedParts },
+        bonusAwarded: gameState.bonusAwarded,
+        playersWhoGuessed: Array.from(gameState.playersWhoGuessed),
+        currentGuesses: { ...gameState.currentGuesses }
+      };
+      
+      if (isComplete) {
+        // Mark track as complete
+        updateTrackStatus(gameState.currentSong.id, 'complete');
+        console.log(`💾 Saved completed state for song: ${gameState.currentSong.name}`);
+      } else {
+        // Mark track as partial if any parts are guessed
+        const anyGuessed = gameState.guessedParts.artist || gameState.guessedParts.title || gameState.guessedParts.lyrics === true;
+        if (anyGuessed) {
+          updateTrackStatus(gameState.currentSong.id, 'partial');
+          console.log(`💾 Saved partial state for song: ${gameState.currentSong.name} - Artist: ${gameState.guessedParts.artist}, Title: ${gameState.guessedParts.title}, Lyrics: ${gameState.guessedParts.lyrics}`);
+        }
+      }
     }
     
     if (correctParts.length > 0) {
