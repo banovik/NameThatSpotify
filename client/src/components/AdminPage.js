@@ -521,6 +521,20 @@ const AdminPage = () => {
     );
   };
 
+  // Play a random unplayed song
+  const playRandomUnplayedSong = () => {
+    // Find all tracks with 'unplayed' status
+    const unplayedTracks = tracks.filter(item => trackStatus[item.track.id] === 'unplayed');
+    if (unplayedTracks.length === 0) {
+      alert('All songs have been played! No unplayed songs remain.');
+      return;
+    }
+    // Pick a random unplayed track
+    const randomIndex = Math.floor(Math.random() * unplayedTracks.length);
+    const randomTrack = unplayedTracks[randomIndex].track;
+    playTrack(randomTrack);
+  };
+
   return (
     <div className="container">
       <div className="admin-header">
@@ -578,12 +592,15 @@ const AdminPage = () => {
         ) : (
           <div>
             <div className="flex-between mb-20">
-              <h3>Current Playlist: {playlist.name}</h3>
+              <h2 className="subtitle">Current Playlist: {playlist.name}</h2>
               <div>
+                <button className="btn" onClick={playRandomUnplayedSong}>
+                Play Random
+                </button>
                 <button className="btn btn-secondary" onClick={resetPlaylist} style={{ marginRight: '10px' }}>
                   Reset Playlist
                 </button>
-                <button className="btn btn-secondary" onClick={selectNewPlaylist}>
+                <button className="btn btn-secondary" onClick={selectNewPlaylist} style={{ marginRight: '10px' }}>
                   Select New Playlist
                 </button>
               </div>
