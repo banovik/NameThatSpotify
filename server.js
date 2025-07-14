@@ -86,19 +86,36 @@ async function fetchLyrics(artistName, songTitle) {
     console.log(`🎯 Selected result: "${song.title}" by "${song.artist.name}"`);
     console.log(`🔗 Genius URL: ${song.url}`);
     
-    // Fetch the lyrics
-    console.log('📖 Fetching lyrics from Genius...');
-    const lyrics = await song.lyrics();
+    // Try to fetch lyrics with multiple approaches
+    console.log('📖 Attempting to fetch lyrics...');
     
-    if (!lyrics || lyrics.trim().length === 0) {
-      console.log('❌ No lyrics content found');
-      return null;
+    // Approach 1: Try the standard lyrics() method
+    try {
+      const lyrics = await song.lyrics();
+      if (lyrics && lyrics.trim().length > 0) {
+        console.log(`✅ Successfully fetched lyrics (${lyrics.length} characters)`);
+        console.log(`📄 Lyrics preview: "${lyrics.substring(0, 100)}..."`);
+        return lyrics;
+      }
+    } catch (lyricsError) {
+      console.log('❌ Standard lyrics method failed:', lyricsError.message);
     }
     
-    console.log(`✅ Successfully fetched lyrics (${lyrics.length} characters)`);
-    console.log(`📄 Lyrics preview: "${lyrics.substring(0, 100)}..."`);
+    // Approach 2: Try to get lyrics from the song URL directly
+    try {
+      console.log('🔄 Trying alternative lyrics fetching method...');
+      const songData = await song.fetch();
+      if (songData && songData.lyrics) {
+        console.log(`✅ Successfully fetched lyrics via alternative method (${songData.lyrics.length} characters)`);
+        return songData.lyrics;
+      }
+    } catch (altError) {
+      console.log('❌ Alternative lyrics method failed:', altError.message);
+    }
     
-    return lyrics;
+    console.log('❌ All lyrics fetching methods failed');
+    return null;
+    
   } catch (error) {
     console.error('❌ Error fetching lyrics from Genius:', error);
     console.error('🔍 Error details:', {
@@ -111,14 +128,10 @@ async function fetchLyrics(artistName, songTitle) {
     // Check if it's a 403 error (common in production)
     if (error.message && error.message.includes('403')) {
       console.log('🚫 403 Forbidden error detected - this is common in production environments');
-      console.log('💡 Possible causes:');
-      console.log('   - User-Agent restrictions');
-      console.log('   - IP address blocking');
-      console.log('   - Rate limiting');
-      console.log('   - Token permissions');
-      console.log('🔧 Trying fallback lyrics service...');
+      console.log('💡 The search API works but lyrics fetching is blocked');
+      console.log('🔧 Using fallback lyrics service...');
       
-      // Try fallback service (Musixmatch-like approach)
+      // Try fallback service
       return await fetchLyricsFallback(artistName, songTitle);
     }
     
