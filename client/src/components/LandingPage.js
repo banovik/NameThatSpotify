@@ -2,6 +2,25 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
+import leoProfanity from 'leo-profanity';
+
+// Utility to replace common leetspeak and symbol substitutions
+function normalizeLeetSpeak(str) {
+  return str
+    .replace(/[@]/gi, 'a')
+    .replace(/[4]/g, 'a')
+    .replace(/[$]/g, 's')
+    .replace(/5/g, 's')
+    .replace(/3/g, 'e')
+    .replace(/1/g, 'i')
+    .replace(/[!|]/g, 'i')
+    .replace(/0/g, 'o')
+    .replace(/7/g, 't')
+    .replace(/8/g, 'b')
+    .replace(/9/g, 'g')
+    .replace(/2/g, 'z')
+    .replace(/6/g, 'g');
+}
 
 const LandingPage = () => {
   const navigate = useNavigate();
@@ -46,8 +65,38 @@ const LandingPage = () => {
 
   const handlePlayerJoin = (e) => {
     e.preventDefault();
-    if (playerName.trim()) {
-      navigate('/player', { state: { playerName: playerName.trim() } });
+    const trimmedName = playerName.trim();
+    // Profanity/obfuscation check
+    if (trimmedName) {
+      leoProfanity.loadDictionary();
+      const lowerName = trimmedName.toLowerCase();
+      const cleanedName = leoProfanity.clean(trimmedName).toLowerCase();
+      const joinedName = trimmedName.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+      const leetName = normalizeLeetSpeak(lowerName);
+      const leetJoined = normalizeLeetSpeak(joinedName);
+      const badWords = leoProfanity.list();
+      // Check if any bad word is a substring of the username (in any form)
+      const containsBadWord = badWords.some(word =>
+        lowerName.includes(word) ||
+        cleanedName.includes(word) ||
+        joinedName.includes(word) ||
+        leetName.includes(word) ||
+        leetJoined.includes(word)
+      );
+      if (
+        leoProfanity.check(trimmedName) ||
+        leoProfanity.check(cleanedName) ||
+        leoProfanity.check(joinedName) ||
+        leoProfanity.check(leetName) ||
+        leoProfanity.check(leetJoined) ||
+        containsBadWord
+      ) {
+        // eslint-disable-next-line no-console
+        console.error('Please choose a different username. Offensive or inappropriate words are not allowed.');
+        alert('Please choose a different username. Offensive or inappropriate words are not allowed.');
+        return;
+      }
+      navigate('/player', { state: { playerName: trimmedName } });
     }
   };
 
