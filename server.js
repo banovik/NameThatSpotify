@@ -5,6 +5,8 @@ const cors = require('cors');
 const SpotifyWebApi = require('spotify-web-api-node');
 const axios = require('axios');
 require('dotenv').config();
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
@@ -54,62 +56,94 @@ let gameState = {
     lyrics: []
   }, // Track all guesses for current song: { guess: string, player: string, timestamp: Date }
   lastGuessTimestamps: {}, // playerName -> timestamp of last guess (ms)
+  scrapingState: {
+    isScraping: false,
+    currentIndex: 0,
+    successfulCount: 0,
+    totalCount: 0,
+    failedIndices: [],
+    playlistTracks: []
+  }
 };
 
-// Function to fetch lyrics from lyrics.ovh API
+// Set up SQLite database for lyrics caching
+const dbPath = path.join(__dirname, 'lyrics.db');
+const lyricsDb = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('Failed to connect to lyrics.db:', err);
+  } else {
+    console.log('Connected to lyrics.db');
+  }
+});
+lyricsDb.run(`CREATE TABLE IF NOT EXISTS lyrics_cache (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  artist TEXT NOT NULL,
+  title TEXT NOT NULL,
+  lyrics TEXT NOT NULL,
+  UNIQUE(artist, title)
+)`);
+
+// Function to fetch lyrics from local DB or API
 async function fetchLyrics(artistName, songTitle) {
+  const normalizedArtist = normalizeArtist(artistName);
+  const normalizedTitle = normalizeTitle(songTitle);
+
+  // Try to get lyrics from local DB first
+  const getLyricsFromDb = () => new Promise((resolve, reject) => {
+    lyricsDb.get(
+      'SELECT lyrics FROM lyrics_cache WHERE artist = ? AND title = ?',
+      [normalizedArtist, normalizedTitle],
+      (err, row) => {
+        if (err) return reject(err);
+        if (row && row.lyrics) {
+          console.log('🎵 Loaded lyrics from local DB');
+          resolve(row.lyrics);
+        } else {
+          resolve(null);
+        }
+      }
+    );
+  });
+
+  let lyrics = await getLyricsFromDb();
+  if (lyrics) return lyrics;
+
+  // If not in DB, fetch from API
   try {
     console.log('🎵 Starting lyrics fetch process...');
     console.log(`📝 Searching for: "${songTitle}" by "${artistName}"`);
-    
-    // Clean and encode the artist and song names for the API
     const cleanArtist = encodeURIComponent(artistName.trim());
     const cleanSong = encodeURIComponent(songTitle.trim());
-    
     console.log(`🔍 Fetching from lyrics.ovh: ${cleanArtist}/${cleanSong}`);
-    
-    // Make request to lyrics.ovh API
     const response = await axios.get(`${LYRICS_OVH_BASE_URL}/${cleanArtist}/${cleanSong}`, {
-      timeout: 10000, // 10 second timeout
+      timeout: 10000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
       }
     });
-    
     if (response.data && response.data.lyrics) {
-      const lyrics = response.data.lyrics.trim();
+      lyrics = response.data.lyrics.trim();
       if (lyrics.length > 0) {
         console.log(`✅ Successfully fetched lyrics (${lyrics.length} characters)`);
-        console.log(`📄 Lyrics preview: "${lyrics.substring(0, 100)}..."`);
+        // Store in DB for future use
+        lyricsDb.run(
+          'INSERT OR IGNORE INTO lyrics_cache (artist, title, lyrics) VALUES (?, ?, ?)',
+          [normalizedArtist, normalizedTitle, lyrics],
+          (err) => {
+            if (err) {
+              console.error('Failed to cache lyrics in DB:', err);
+            } else {
+              console.log('🗄️ Cached lyrics in local DB');
+            }
+          }
+        );
         return lyrics;
       }
     }
-    
     console.log('❌ No lyrics found in response');
     return null;
-    
   } catch (error) {
     console.error('❌ Error fetching lyrics from lyrics.ovh:', error);
-    console.error('🔍 Error details:', {
-      message: error.message,
-      status: error.response?.status,
-      statusText: error.response?.statusText,
-      artistName,
-      songTitle
-    });
-    
-    // Check if it's a 404 (song not found)
-    if (error.response?.status === 404) {
-      console.log('❌ Song not found in lyrics.ovh database');
-      return null;
-    }
-    
-    // Check if it's a timeout or network error
-    if (error.code === 'ECONNABORTED' || error.code === 'ENOTFOUND') {
-      console.log('❌ Network error or timeout');
-      return null;
-    }
-    
     return null;
   }
 }
@@ -497,6 +531,136 @@ app.post('/api/reset-playlist', (req, res) => {
   res.json({ success: true });
 });
 
+// API endpoint to scrape lyrics for all songs in a playlist
+app.post('/api/scrape-lyrics', async (req, res) => {
+  if (!gameState.currentPlaylist) {
+    return res.status(400).json({ error: 'No playlist loaded' });
+  }
+
+  if (gameState.scrapingState.isScraping) {
+    return res.status(400).json({ error: 'Lyrics scraping already in progress' });
+  }
+
+  const tracks = gameState.currentPlaylist.tracks.items;
+  gameState.scrapingState = {
+    isScraping: true,
+    currentIndex: 0,
+    successfulCount: 0,
+    totalCount: tracks.length,
+    failedIndices: [],
+    playlistTracks: tracks
+  };
+
+  console.log(`🎵 Starting lyrics scraping for ${tracks.length} songs`);
+
+  // Start the scraping process
+  scrapeLyricsForPlaylist();
+
+  res.json({ 
+    success: true, 
+    message: `Started scraping lyrics for ${tracks.length} songs`,
+    totalCount: tracks.length
+  });
+});
+
+// API endpoint to stop lyrics scraping
+app.post('/api/stop-scraping', (req, res) => {
+  if (!gameState.scrapingState.isScraping) {
+    return res.status(400).json({ error: 'No scraping in progress' });
+  }
+
+  gameState.scrapingState.isScraping = false;
+  console.log('Lyrics scraping stopped by user');
+  
+  res.json({ success: true, message: 'Lyrics scraping stopped' });
+});
+
+// API endpoint to get scraping progress
+app.get('/api/scraping-progress', (req, res) => {
+  const state = gameState.scrapingState;
+  res.json({
+    isScraping: state.isScraping,
+    currentIndex: state.currentIndex,
+    successfulCount: state.successfulCount,
+    totalCount: state.totalCount,
+    progress: state.totalCount > 0 ? (state.successfulCount / state.totalCount) * 100 : 0
+  });
+});
+
+// Function to scrape lyrics for all songs in the playlist
+async function scrapeLyricsForPlaylist() {
+  const state = gameState.scrapingState;
+  
+  while (state.isScraping && state.successfulCount < state.totalCount) {
+    // Process current index
+    if (state.currentIndex < state.playlistTracks.length) {
+      const track = state.playlistTracks[state.currentIndex];
+      if (track && track.track) {
+        console.log(`Scraping lyrics for: ${track.track.name} by ${track.track.artists.map(a => a.name).join(', ')}`);
+        
+        try {
+          const lyrics = await fetchLyrics(
+            track.track.artists[0].name, 
+            track.track.name
+          );
+          
+          if (lyrics) {
+            state.successfulCount++;
+            console.log(`Successfully scraped lyrics for: ${track.track.name}`);
+          } else {
+            // Add to failed indices for retry
+            if (!state.failedIndices.includes(state.currentIndex)) {
+              state.failedIndices.push(state.currentIndex);
+            }
+            console.log(`Failed to scrape lyrics for: ${track.track.name}`);
+          }
+        } catch (error) {
+          console.error(`Error scraping lyrics for ${track.track.name}:`, error);
+          if (!state.failedIndices.includes(state.currentIndex)) {
+            state.failedIndices.push(state.currentIndex);
+          }
+        }
+      }
+      state.currentIndex++;
+    } else {
+      // If we've processed all tracks, retry failed ones
+      if (state.failedIndices.length > 0) {
+        const retryIndex = state.failedIndices.shift();
+        state.currentIndex = retryIndex;
+        console.log(`Retrying failed song at index ${retryIndex}`);
+      } else {
+        // No more failed songs to retry, we're done
+        break;
+      }
+    }
+
+    // Emit progress update to all clients
+    io.emit('scrapingProgress', {
+      isScraping: state.isScraping,
+      currentIndex: state.currentIndex,
+      successfulCount: state.successfulCount,
+      totalCount: state.totalCount,
+      progress: (state.successfulCount / state.totalCount) * 100
+    });
+
+    // Small delay to prevent overwhelming the API
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+
+  // Scraping completed
+  state.isScraping = false;
+  console.log(`🎵 Lyrics scraping completed. ${state.successfulCount}/${state.totalCount} songs scraped successfully`);
+  
+  // Emit final progress update
+  io.emit('scrapingProgress', {
+    isScraping: false,
+    currentIndex: state.currentIndex,
+    successfulCount: state.successfulCount,
+    totalCount: state.totalCount,
+    progress: (state.successfulCount / state.totalCount) * 100
+  });
+}
+
 // Get available Spotify devices
 app.get('/api/devices', async (req, res) => {
   if (!gameState.accessToken) {
@@ -529,13 +693,13 @@ app.get('/api/debug/lyrics', (req, res) => {
 // Simple lyrics.ovh API test endpoint
 app.get('/api/debug/lyrics-test', async (req, res) => {
   try {
-    console.log('🧪 Simple lyrics.ovh API test...');
+    console.log('Simple lyrics.ovh API test...');
     
     // Test with a well-known song
     const testArtist = 'Queen';
     const testSong = 'Bohemian Rhapsody';
     
-    console.log(`🔍 Testing with: "${testSong}" by "${testArtist}"`);
+    console.log(`Testing with: "${testSong}" by "${testArtist}"`);
     
     const lyrics = await fetchLyrics(testArtist, testSong);
     
@@ -558,7 +722,7 @@ app.get('/api/debug/lyrics-test', async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('❌ Lyrics.ovh API test failed:', error);
+    console.error('Lyrics.ovh API test failed:', error);
     res.json({
       success: false,
       error: error.message,
@@ -571,7 +735,7 @@ app.get('/api/debug/lyrics-test', async (req, res) => {
 // Detailed lyrics.ovh API diagnostics endpoint
 app.get('/api/debug/lyrics-diagnostics', async (req, res) => {
   try {
-    console.log('🔍 Running lyrics.ovh API diagnostics...');
+    console.log('Running lyrics.ovh API diagnostics...');
     
     const diagnostics = {
       lyricsService: 'lyrics.ovh',
@@ -592,7 +756,7 @@ app.get('/api/debug/lyrics-diagnostics', async (req, res) => {
     
     for (const test of testSongs) {
       try {
-        console.log(`🔍 Testing: "${test.song}" by "${test.artist}"`);
+        console.log(`Testing: "${test.song}" by "${test.artist}"`);
         const lyrics = await fetchLyrics(test.artist, test.song);
         testResults[`${test.artist} - ${test.song}`] = {
           success: !!lyrics,
@@ -616,7 +780,7 @@ app.get('/api/debug/lyrics-diagnostics', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Lyrics.ovh diagnostics failed:', error);
+    console.error('Lyrics.ovh diagnostics failed:', error);
     res.json({
       success: false,
       error: error.message,
@@ -629,13 +793,13 @@ app.get('/api/debug/lyrics-diagnostics', async (req, res) => {
 // Test lyrics fetching endpoint
 app.get('/api/debug/test-lyrics', async (req, res) => {
   try {
-    console.log('🧪 Testing lyrics fetching...');
+    console.log('Testing lyrics fetching...');
     
     // Test with a well-known song
     const testArtist = 'Queen';
     const testSong = 'Bohemian Rhapsody';
     
-    console.log(`🧪 Testing with: "${testSong}" by "${testArtist}"`);
+    console.log(`Testing with: "${testSong}" by "${testArtist}"`);
     
     const lyrics = await fetchLyrics(testArtist, testSong);
     
@@ -658,7 +822,7 @@ app.get('/api/debug/test-lyrics', async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('🧪 Test lyrics error:', error);
+    console.error('Test lyrics error:', error);
     res.json({
       success: false,
       error: error.message,
@@ -716,7 +880,7 @@ app.post('/api/seek', async (req, res) => {
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
-  console.log('🔗 User connected with socket ID:', socket.id);
+  console.log('User connected with socket ID:', socket.id);
   
   // Send current game state to new player
   socket.emit('gameState', {
@@ -729,7 +893,7 @@ io.on('connection', (socket) => {
   
   // Player joins
   socket.on('playerJoin', (playerName) => {
-    console.log(`👤 Player attempting to join: ${playerName} (socket: ${socket.id})`);
+    console.log(`Player attempting to join: ${playerName} (socket: ${socket.id})`);
     
     // Check if username is already taken by another active player
     if (gameState.activeUsernames.has(playerName)) {
@@ -741,7 +905,7 @@ io.on('connection', (socket) => {
       if (existingSocketId && existingSocketId !== socket.id) {
         // Username is taken by another active player
         socket.emit('usernameTaken', { error: 'Username is already taken by another player' });
-        console.log(`❌ Username "${playerName}" rejected - already taken by another player`);
+        console.log(`Username "${playerName}" rejected - already taken by another player`);
         return;
       }
     }
@@ -753,14 +917,14 @@ io.on('connection', (socket) => {
     // Initialize score if this is a new player, otherwise keep existing score
     if (!gameState.scores[playerName]) {
       gameState.scores[playerName] = 0;
-      console.log(`🆕 New player "${playerName}" joined with 0 points`);
+      console.log(`New player "${playerName}" joined with 0 points`);
     } else {
-      console.log(`🔄 Player "${playerName}" reconnected with ${gameState.scores[playerName]} points`);
+      console.log(`Player "${playerName}" reconnected with ${gameState.scores[playerName]} points`);
     }
     
     io.emit('playerJoined', { playerName, players: gameState.players, scores: gameState.scores });
-    console.log(`📊 Updated players:`, gameState.players);
-    console.log(`📊 Updated scores:`, gameState.scores);
+    console.log(`Updated players:`, gameState.players);
+    console.log(`Updated scores:`, gameState.scores);
   });
   
   // Player makes a guess

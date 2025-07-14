@@ -29,6 +29,13 @@ const AdminPage = () => {
     title: [],
     lyrics: []
   });
+  const [scrapingProgress, setScrapingProgress] = useState({
+    isScraping: false,
+    currentIndex: 0,
+    successfulCount: 0,
+    totalCount: 0,
+    progress: 0
+  });
 
   useEffect(() => {
     // Check if user is authenticated
@@ -118,6 +125,11 @@ const AdminPage = () => {
     newSocket.on('guessesUpdated', (data) => {
       console.log('Admin: Guesses updated:', data.currentGuesses);
       setCurrentGuesses(data.currentGuesses);
+    });
+
+    newSocket.on('scrapingProgress', (data) => {
+      console.log('Admin: Scraping progress:', data);
+      setScrapingProgress(data);
     });
 
     newSocket.on('newSong', (song) => {
@@ -535,6 +547,30 @@ const AdminPage = () => {
     playTrack(randomTrack);
   };
 
+  // Start lyrics scraping
+  const startLyricsScraping = async () => {
+    try {
+      const response = await axios.post('/api/scrape-lyrics');
+      console.log('Started lyrics scraping:', response.data);
+      setError('');
+    } catch (error) {
+      setError('Failed to start lyrics scraping: ' + (error.response?.data?.error || error.message));
+      console.error('Lyrics scraping error:', error);
+    }
+  };
+
+  // Stop lyrics scraping
+  const stopLyricsScraping = async () => {
+    try {
+      const response = await axios.post('/api/stop-scraping');
+      console.log('Stopped lyrics scraping:', response.data);
+      setError('');
+    } catch (error) {
+      setError('Failed to stop lyrics scraping: ' + (error.response?.data?.error || error.message));
+      console.error('Stop scraping error:', error);
+    }
+  };
+
   return (
     <div className="container">
       <div className="admin-header">
@@ -606,6 +642,39 @@ const AdminPage = () => {
               </div>
             </div>
             
+            {/* Lyrics Scraping Controls */}
+            <div className="card mb-20">
+              <h3 className="subtitle">Lyrics Management</h3>
+              <p className="text-center mb-20">
+                Pre-fetch lyrics for all songs in the playlist to improve performance during gameplay.
+              </p>
+              
+              {!scrapingProgress.isScraping ? (
+                <div className="flex-center">
+                  <button className="btn" onClick={startLyricsScraping}>
+                    Scrape Lyrics
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div className="flex-between mb-10">
+                    <span>Progress: {scrapingProgress.successfulCount}/{scrapingProgress.totalCount} songs scraped successfully</span>
+                    <button className="btn btn-danger" onClick={stopLyricsScraping}>
+                      Stop Scraping
+                    </button>
+                  </div>
+                  <div className="progress-bar-container">
+                    <div className="progress-bar">
+                      <div 
+                        className="progress-fill" 
+                        style={{ width: `${scrapingProgress.progress}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="player-list">
               {tracks.map((item, index) => (
                 <div key={item.track.id} className="player-item">
