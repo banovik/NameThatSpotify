@@ -8,7 +8,7 @@ This guide will help you deploy the Spotify Music Game to a production server.
 - A domain name (optional but recommended)
 - SSL certificate (required for HTTPS)
 - Spotify Developer App configured
-- Genius API account (optional, for lyrics)
+- SQLite3 support (for lyrics caching)
 
 ## 🔧 Environment Configuration
 
@@ -30,10 +30,9 @@ PORT=5001
 
 # Admin Authentication
 ADMIN_PASSWORD=your_secure_admin_password_here
-
-# Genius API (Optional - for lyrics)
-GENIUS_ACCESS_TOKEN=your_genius_access_token_here
 ```
+
+**Note**: The app now uses lyrics.ovh API for lyrics (no authentication required) and caches lyrics locally in SQLite.
 
 ### 2. Frontend Environment Variables
 
@@ -217,6 +216,11 @@ curl https://yourdomain.com/api/devices
 - Connect Spotify account
 - Try playing a song
 
+### 4. Test Lyrics Features
+- Load a playlist
+- Test lyrics scraping functionality
+- Verify lyrics availability indicators
+
 ## 🔒 Security Considerations
 
 ### 1. Environment Variables
@@ -238,6 +242,11 @@ sudo ufw enable
 - Update dependencies regularly
 - Monitor for security vulnerabilities
 
+### 4. Database Security
+- The SQLite lyrics database is created automatically
+- Ensure proper file permissions on the database file
+- Consider backing up the lyrics database regularly
+
 ## 🐛 Troubleshooting
 
 ### Common Issues
@@ -248,70 +257,80 @@ sudo ufw enable
 
 2. **Socket.IO Connection Issues**
    - Verify `REACT_APP_BACKEND_URL` is set correctly
-   - Check firewall settings
-   - Ensure WebSocket proxy is configured in Nginx
+   - Check that the backend server is running
 
-3. **Spotify Authentication Fails**
-   - Verify redirect URI matches exactly
-   - Check SSL certificate is valid
-   - Ensure domain is accessible
+3. **Lyrics Not Loading**
+   - Check internet connectivity (lyrics.ovh API requires internet)
+   - Verify the lyrics database has proper write permissions
+   - Check server logs for lyrics API errors
 
-4. **Playback Not Working**
-   - Admin must have Spotify Premium
-   - Spotify must be open and active
-   - Check device availability
+4. **SQLite Issues**
+   - Ensure the server has write permissions in the root directory
+   - Check that sqlite3 is properly installed
+   - Verify the lyrics.db file is created and accessible
 
-### Logs and Monitoring
+5. **Admin Features Not Working**
+   - Verify the admin password is set correctly
+   - Check that Spotify authentication is working
+   - Ensure all required environment variables are set
 
+## 📊 Monitoring
+
+### 1. Log Monitoring
 ```bash
 # View PM2 logs
-pm2 logs
-
-# View Nginx logs
-sudo tail -f /var/log/nginx/access.log
-sudo tail -f /var/log/nginx/error.log
+pm2 logs spotify-game-backend
 
 # Monitor system resources
-htop
+pm2 monit
 ```
 
-## 📈 Scaling Considerations
+### 2. Database Monitoring
+```bash
+# Check lyrics database size
+ls -lh lyrics.db
 
-### 1. Load Balancing
-- Use multiple backend instances
-- Configure load balancer for WebSocket connections
+# Backup lyrics database
+cp lyrics.db lyrics.db.backup
+```
 
-### 2. Database (Future Enhancement)
-- Consider adding a database for persistent data
-- Store user scores and game history
+## 🔄 Updates
 
-### 3. CDN
-- Serve static assets through a CDN
-- Improve global performance
-
-## 🔄 Updates and Maintenance
-
-### 1. Code Updates
+### 1. Application Updates
 ```bash
 # Pull latest changes
 git pull origin main
 
-# Install dependencies
+# Install new dependencies
 npm install
 cd client && npm install && cd ..
 
-# Build frontend
+# Rebuild frontend
 cd client && npm run build && cd ..
 
 # Restart services
-pm2 restart all
+pm2 restart spotify-game-backend
+pm2 restart spotify-game-frontend
 ```
 
-### 2. Backup Strategy
-- Regular backups of environment files
-- Database backups (if implemented)
-- Configuration backups
+### 2. Database Migrations
+- The SQLite database is automatically created and managed
+- No manual migrations required for lyrics caching
+
+## 📈 Performance Optimization
+
+### 1. Caching
+- Lyrics are automatically cached in SQLite
+- Consider implementing Redis for session storage if needed
+
+### 2. Load Balancing
+- For high-traffic deployments, consider using multiple backend instances
+- Use a load balancer to distribute traffic
+
+### 3. CDN
+- Consider using a CDN for static assets
+- Configure proper caching headers
 
 ---
 
-**Happy Deploying! 🎵🎮** 
+**Happy Deploying! 🚀🎵** 
