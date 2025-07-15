@@ -42,6 +42,9 @@ const AdminPage = () => {
   const [playlistHidden, setPlaylistHidden] = useState(false);
   const [editingPlayer, setEditingPlayer] = useState(null);
   const [newScore, setNewScore] = useState('');
+  // Add state for editing lyrics in Now Playing
+  const [editingLyrics, setEditingLyrics] = useState(false);
+  const [editedLyricsText, setEditedLyricsText] = useState('');
 
   useEffect(() => {
     // Check if user is authenticated
@@ -648,6 +651,30 @@ const AdminPage = () => {
     }
   };
 
+  // Add handler for saving edited lyrics for current track
+  const handleSaveEditedLyrics = async () => {
+    if (!editedLyricsText.trim()) {
+      alert('Lyrics text cannot be empty.');
+      return;
+    }
+    try {
+      await axios.post('/api/manual-lyrics', {
+        id: currentTrack.id,
+        artist: formatArtists(currentTrack.artists),
+        title: currentTrack.name,
+        lyrics: editedLyricsText
+      });
+      setEditingLyrics(false);
+      setEditedLyricsText('');
+      // Optionally update currentTrack.lyrics in state
+      setCurrentTrack(prev => prev ? { ...prev, lyrics: editedLyricsText } : prev);
+      alert('Lyrics updated successfully!');
+    } catch (error) {
+      console.error('Error saving edited lyrics:', error);
+      alert('Failed to update lyrics. Please try again.');
+    }
+  };
+
   return (
     <div className="container">
       <div className="admin-header">
@@ -828,7 +855,43 @@ const AdminPage = () => {
               >
                 {isPlaying ? '⏸️ Pause' : '▶️ Play'}
               </button>
+              {/* Edit Lyrics Button */}
+              {currentTrack && (
+                <button
+                  className="btn btn-secondary"
+                  style={{ marginLeft: '10px' }}
+                  onClick={() => {
+                    setEditingLyrics(true);
+                    setEditedLyricsText(currentTrack.lyrics || '');
+                  }}
+                  disabled={editingLyrics}
+                >
+                  Edit Lyrics
+                </button>
+              )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lyrics Editor Modal/Inline */}
+      {editingLyrics && (
+        <div className="card" style={{ marginTop: '20px', background: '#f8f9fa' }}>
+          <h3>Edit Lyrics for: {currentTrack.name} by {formatArtists(currentTrack.artists)}</h3>
+          <textarea
+            className="input"
+            value={editedLyricsText}
+            onChange={e => setEditedLyricsText(e.target.value)}
+            rows="6"
+            style={{ width: '100%', fontSize: '14px', marginBottom: '10px' }}
+          />
+          <div className="flex-center">
+            <button className="btn btn-success" onClick={handleSaveEditedLyrics}>
+              Save
+            </button>
+            <button className="btn btn-secondary" onClick={() => setEditingLyrics(false)} style={{ marginLeft: '10px' }}>
+              Cancel
+            </button>
           </div>
         </div>
       )}
@@ -867,15 +930,15 @@ const AdminPage = () => {
       {/* Player Guesses */}
       {!playlistHidden && currentTrack && (
         <div className="card">
-          <h2 className="subtitle">Player Guesses</h2>
+          <h2 className="subtitle">Player Guesses - To manually award a point, click on a guess below.</h2>
           <div className="grid">
-            <div>
-              <h4 style={{ color: '#1db954', marginBottom: '10px' }}>Artist Guesses</h4>
-              {renderGuesses('artist')}
-            </div>
             <div>
               <h4 style={{ color: '#1db954', marginBottom: '10px' }}>Title Guesses</h4>
               {renderGuesses('title')}
+            </div>
+            <div>
+              <h4 style={{ color: '#1db954', marginBottom: '10px' }}>Artist Guesses</h4>
+              {renderGuesses('artist')}
             </div>
             <div>
               <h4 style={{ color: '#1db954', marginBottom: '10px' }}>Lyrics Guesses</h4>
