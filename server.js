@@ -493,6 +493,22 @@ app.post('/api/reset-scores', (req, res) => {
   res.json({ success: true });
 });
 
+app.post('/api/update-score', (req, res) => {
+  const { playerName, newScore } = req.body;
+  if (!playerName || newScore === undefined || newScore === null) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+  if (typeof newScore !== 'number' || newScore < 0) {
+    return res.status(400).json({ error: 'Invalid score value' });
+  }
+  // Update the player's score
+  gameState.scores[playerName] = newScore;
+  console.log(`Score updated for ${playerName}: ${newScore}`);
+  // Notify all clients of the score update
+  io.emit('scoresUpdated', { scores: gameState.scores });
+  res.json({ success: true });
+});
+
 app.get('/api/track-status', (req, res) => {
   res.json({ success: true, trackStatus: gameState.trackStatus });
 });
@@ -590,32 +606,60 @@ app.get('/api/scraping-progress', (req, res) => {
 // Function to scrape lyrics for all songs in the playlist
 async function scrapeLyricsForPlaylist() {
   const state = gameState.scrapingState;
-  
+  // Build a list of tracks missing lyrics in the DB
+  const allTracks = state.playlistTracks;
+  const missingTracks = await new Promise((resolve) => {
+    let results = [];
+    let checked = 0;
+    allTracks.forEach((trackItem, idx) => {
+      if (!trackItem || !trackItem.track) {
+        checked++;
+        if (checked === allTracks.length) resolve(results);
+        return;
+      }
+      const artist = trackItem.track.artists[0].name;
+      const title = trackItem.track.name;
+      const normalizedArtist = normalizeArtist(artist);
+      const normalizedTitle = normalizeTitle(title);
+      lyricsDb.get(
+        'SELECT lyrics FROM lyrics_cache WHERE artist = ? AND title = ?',
+        [normalizedArtist, normalizedTitle],
+        (err, row) => {
+          if (!row || !row.lyrics) {
+            results.push({ track: trackItem.track, idx });
+          }
+          checked++;
+          if (checked === allTracks.length) resolve(results);
+        }
+      );
+    });
+  });
+  // Only process missing tracks
+  state.missingTracks = missingTracks;
+  state.isScraping = true;
+  state.currentIndex = 0;
+  state.successfulCount = 0;
+  state.totalCount = missingTracks.length;
+  state.failedIndices = [];
+
   while (state.isScraping && state.successfulCount < state.totalCount) {
-    // Process current index
-    if (state.currentIndex < state.playlistTracks.length) {
-      const track = state.playlistTracks[state.currentIndex];
-      if (track && track.track) {
-        console.log(`Scraping lyrics for: ${track.track.name} by ${track.track.artists.map(a => a.name).join(', ')}`);
-        
+    if (state.currentIndex < state.missingTracks.length) {
+      const { track, idx } = state.missingTracks[state.currentIndex];
+      if (track) {
+        console.log(`Scraping lyrics for: ${track.name} by ${track.artists.map(a => a.name).join(', ')}`);
         try {
-          const lyrics = await fetchLyrics(
-            track.track.artists[0].name, 
-            track.track.name
-          );
-          
+          const lyrics = await fetchLyrics(track.artists[0].name, track.name);
           if (lyrics) {
             state.successfulCount++;
-            console.log(`Successfully scraped lyrics for: ${track.track.name}`);
+            console.log(`Successfully scraped lyrics for: ${track.name}`);
           } else {
-            // Add to failed indices for retry
             if (!state.failedIndices.includes(state.currentIndex)) {
               state.failedIndices.push(state.currentIndex);
             }
-            console.log(`Failed to scrape lyrics for: ${track.track.name}`);
+            console.log(`Failed to scrape lyrics for: ${track.name}`);
           }
         } catch (error) {
-          console.error(`Error scraping lyrics for ${track.track.name}:`, error);
+          console.error(`Error scraping lyrics for ${track.name}:`, error);
           if (!state.failedIndices.includes(state.currentIndex)) {
             state.failedIndices.push(state.currentIndex);
           }
@@ -623,41 +667,31 @@ async function scrapeLyricsForPlaylist() {
       }
       state.currentIndex++;
     } else {
-      // If we've processed all tracks, retry failed ones
       if (state.failedIndices.length > 0) {
         const retryIndex = state.failedIndices.shift();
         state.currentIndex = retryIndex;
         console.log(`Retrying failed song at index ${retryIndex}`);
       } else {
-        // No more failed songs to retry, we're done
         break;
       }
     }
-
-    // Emit progress update to all clients
     io.emit('scrapingProgress', {
       isScraping: state.isScraping,
       currentIndex: state.currentIndex,
       successfulCount: state.successfulCount,
       totalCount: state.totalCount,
-      progress: (state.successfulCount / state.totalCount) * 100
+      progress: (state.totalCount > 0 ? (state.successfulCount / state.totalCount) * 100 : 100)
     });
-
-    // Small delay to prevent overwhelming the API
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
-
-  // Scraping completed
   state.isScraping = false;
   console.log(`🎵 Lyrics scraping completed. ${state.successfulCount}/${state.totalCount} songs scraped successfully`);
-  
-  // Emit final progress update
   io.emit('scrapingProgress', {
     isScraping: false,
     currentIndex: state.currentIndex,
     successfulCount: state.successfulCount,
     totalCount: state.totalCount,
-    progress: (state.successfulCount / state.totalCount) * 100
+    progress: (state.totalCount > 0 ? (state.successfulCount / state.totalCount) * 100 : 100)
   });
 }
 
@@ -876,6 +910,117 @@ app.post('/api/seek', async (req, res) => {
     console.error('Error seeking to position:', error);
     res.status(500).json({ error: 'Failed to seek to position' });
   }
+});
+
+// API endpoint to check lyrics availability for a list of songs
+app.post('/api/lyrics-availability', async (req, res) => {
+  const { songs } = req.body; // [{ id, artist, title }]
+  if (!Array.isArray(songs)) {
+    return res.status(400).json({ error: 'Missing or invalid songs array' });
+  }
+  const results = {};
+  let checked = 0;
+  songs.forEach(song => {
+    if (!song || !song.artist || !song.title || !song.id) {
+      results[song.id] = false;
+      checked++;
+      if (checked === songs.length) {
+        return res.json({ availability: results });
+      }
+      return;
+    }
+    const normalizedArtist = normalizeArtist(song.artist);
+    const normalizedTitle = normalizeTitle(song.title);
+    lyricsDb.get(
+      'SELECT lyrics FROM lyrics_cache WHERE artist = ? AND title = ?',
+      [normalizedArtist, normalizedTitle],
+      (err, row) => {
+        results[song.id] = !!(row && row.lyrics);
+        checked++;
+        if (checked === songs.length) {
+          return res.json({ availability: results });
+        }
+      }
+    );
+  });
+});
+
+app.post('/api/manual-lyrics', async (req, res) => {
+  const { id, artist, title, lyrics } = req.body;
+  if (!id || !artist || !title || !lyrics) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+  const normalizedArtist = normalizeArtist(artist);
+  const normalizedTitle = normalizeTitle(title);
+  lyricsDb.run(
+    'INSERT OR REPLACE INTO lyrics_cache (artist, title, lyrics) VALUES (?, ?, ?)',
+    [normalizedArtist, normalizedTitle, lyrics],
+    function (err) {
+      if (err) {
+        console.error('Failed to save manual lyrics:', err);
+        return res.status(500).json({ error: 'Failed to save lyrics' });
+      }
+      return res.json({ success: true });
+    }
+  );
+});
+
+app.post('/api/manual-award', (req, res) => {
+  const { playerName, guessType, guessText } = req.body;
+  if (!playerName || !guessType || !guessText) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+  if (!gameState.currentSong) {
+    return res.status(400).json({ error: 'No current song' });
+  }
+  if (gameState.guessedParts[guessType] === true) {
+    return res.status(400).json({ error: 'This category has already been guessed' });
+  }
+  // Award point to player
+  gameState.scores[playerName] = (gameState.scores[playerName] || 0) + 1;
+  // Mark category as guessed
+  gameState.guessedParts[guessType] = true;
+  // Track that this player made a correct guess
+  gameState.playersWhoGuessed.add(playerName);
+  // Check if all parts are now guessed
+  const allPartsGuessed = gameState.guessedParts.artist && gameState.guessedParts.title && (gameState.guessedParts.lyrics === true || gameState.guessedParts.lyrics === null);
+  // Award bonus if this player just completed all parts alone
+  let bonusAwarded = false;
+  if (allPartsGuessed && !gameState.bonusAwarded && gameState.playersWhoGuessed.size === 1) {
+    gameState.scores[playerName]++;
+    gameState.bonusAwarded = true;
+    bonusAwarded = true;
+  }
+  // Update track status
+  if (gameState.currentSong && gameState.currentSong.id) {
+    if (allPartsGuessed) {
+      updateTrackStatus(gameState.currentSong.id, 'complete');
+    } else {
+      updateTrackStatus(gameState.currentSong.id, 'partial');
+    }
+  }
+  // Save song state
+  if (gameState.currentSong) {
+    gameState.songStates[gameState.currentSong.id] = {
+      isComplete: allPartsGuessed,
+      guessedParts: { ...gameState.guessedParts },
+      bonusAwarded: gameState.bonusAwarded,
+      playersWhoGuessed: Array.from(gameState.playersWhoGuessed),
+      currentGuesses: { ...gameState.currentGuesses }
+    };
+  }
+  // Notify all clients
+  io.emit('correctGuess', { 
+    playerName, 
+    players: gameState.players, 
+    scores: gameState.scores,
+    guessedParts: gameState.guessedParts,
+    correctParts: [guessType],
+    allPartsGuessed,
+    bonusAwarded
+  });
+  console.log(`Manual award: ${playerName} earned 1 point for ${guessType} guess: "${guessText}"${bonusAwarded ? ' + 1 bonus point' : ''}`);
+  res.json({ success: true });
 });
 
 // Socket.IO connection handling

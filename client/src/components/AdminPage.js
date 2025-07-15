@@ -36,6 +36,12 @@ const AdminPage = () => {
     totalCount: 0,
     progress: 0
   });
+  const [lyricsAvailability, setLyricsAvailability] = useState({});
+  const [manualLyricsTrackId, setManualLyricsTrackId] = useState(null);
+  const [manualLyricsText, setManualLyricsText] = useState('');
+  const [playlistHidden, setPlaylistHidden] = useState(false);
+  const [editingPlayer, setEditingPlayer] = useState(null);
+  const [newScore, setNewScore] = useState('');
 
   useEffect(() => {
     // Check if user is authenticated
@@ -120,6 +126,7 @@ const AdminPage = () => {
       setCurrentTrack(null);
       setIsPlaying(false);
       setCurrentGuesses({ artist: [], title: [], lyrics: [] });
+      setLyricsAvailability({}); // Reset lyrics availability on playlist reset
     });
 
     newSocket.on('guessesUpdated', (data) => {
@@ -130,6 +137,10 @@ const AdminPage = () => {
     newSocket.on('scrapingProgress', (data) => {
       console.log('Admin: Scraping progress:', data);
       setScrapingProgress(data);
+      // After scraping is completed or stopped, recheck lyrics availability
+      if (!data.isScraping) {
+        checkLyricsAvailability();
+      }
     });
 
     newSocket.on('newSong', (song) => {
@@ -171,6 +182,12 @@ const AdminPage = () => {
     };
   }, [navigate]);
 
+  useEffect(() => {
+    if (tracks && tracks.length > 0) {
+      checkLyricsAvailability();
+    }
+  }, [tracks]);
+
   // Update playback position periodically when playing
   useEffect(() => {
     let interval;
@@ -202,17 +219,6 @@ const AdminPage = () => {
     } catch (error) {
       console.error('Error checking devices:', error);
       setError('Failed to check Spotify devices');
-    }
-  };
-
-  const checkLyricsConfig = async () => {
-    try {
-      const response = await axios.get('/api/debug/lyrics');
-      console.log('Lyrics configuration:', response.data);
-      alert(`Lyrics Configuration:\n${response.data.message}\nService: ${response.data.lyricsService}\nBase URL: ${response.data.baseUrl}`);
-    } catch (error) {
-      console.error('Error checking lyrics config:', error);
-      alert('Failed to check lyrics configuration');
     }
   };
 
@@ -299,6 +305,8 @@ const AdminPage = () => {
       // Get track status after loading playlist
       await getTrackStatus();
       setError('');
+      // Check lyrics availability after playlist loads
+      await checkLyricsAvailability();
     } catch (error) {
       setError('Failed to load playlist. Please check the URL and try again. Please ensure that the playlist is public and that it is not created by Spotify or a bot.');
       console.error('Playlist error:', error);
@@ -396,6 +404,7 @@ const AdminPage = () => {
     setCurrentTrack(null);
     setIsPlaying(false);
     setPlaylistUrl('');
+    setLyricsAvailability({}); // Reset lyrics availability on new playlist selection
   };
 
   const handleLogout = () => {
@@ -491,6 +500,7 @@ const AdminPage = () => {
       setCurrentTrack(null);
       setIsPlaying(false);
       setError('');
+      setLyricsAvailability({}); // Reset lyrics availability on playlist reset
     } catch (error) {
       setError('Failed to reset playlist.');
       console.error('Reset playlist error:', error);
@@ -524,7 +534,7 @@ const AdminPage = () => {
     return (
       <div className="guess-list">
         {guesses.map((guess, index) => (
-          <div key={index} className="guess-item">
+          <div key={index} className="guess-item" onClick={() => handleManualAward(guess.player, guessType, guess.guess)} style={{ cursor: guessedParts[guessType] !== true ? 'pointer' : 'default' }}>
             <span className="guess-text">"{guess.guess}"</span>
             <span className="guess-player">| {guess.player}</span>
           </div>
@@ -568,6 +578,73 @@ const AdminPage = () => {
     } catch (error) {
       setError('Failed to stop lyrics scraping: ' + (error.response?.data?.error || error.message));
       console.error('Stop scraping error:', error);
+    }
+  };
+
+  // Check lyrics availability for all tracks in the current playlist
+  const checkLyricsAvailability = async () => {
+    try {
+      const response = await axios.post('/api/lyrics-availability', { songs: tracks.map(item => ({ id: item.track.id, artist: item.track.artists[0].name, title: item.track.name })) });
+      setLyricsAvailability(response.data.availability);
+      console.log('Lyrics availability checked:', response.data.availability);
+    } catch (error) {
+      console.error('Error checking lyrics availability:', error);
+      setError('Failed to check lyrics availability for playlist tracks.');
+    }
+  };
+
+  const handleSaveManualLyrics = async () => {
+    if (!manualLyricsText.trim()) {
+      alert('Lyrics text cannot be empty.');
+      return;
+    }
+    try {
+      await axios.post('/api/manual-lyrics', {
+        id: manualLyricsTrackId,
+        artist: tracks.find(item => item.track.id === manualLyricsTrackId)?.track.artists[0]?.name,
+        title: tracks.find(item => item.track.id === manualLyricsTrackId)?.track.name,
+        lyrics: manualLyricsText
+      });
+      console.log('Manual lyrics saved:', { id: manualLyricsTrackId, lyrics: manualLyricsText });
+      setLyricsAvailability(prev => ({ ...prev, [manualLyricsTrackId]: true }));
+      setManualLyricsTrackId(null);
+      setManualLyricsText('');
+      alert('Lyrics saved successfully!');
+    } catch (error) {
+      console.error('Error saving manual lyrics:', error);
+      alert('Failed to save lyrics. Please try again.');
+    }
+  };
+
+  // 1. Add a function handleManualAward that takes (playerName, guessType, guessText) and POSTs to /api/manual-award with { playerName, guessType, guessText }
+  const handleManualAward = async (playerName, guessType, guessText) => {
+    try {
+      await axios.post('/api/manual-award', { playerName, guessType, guessText });
+      console.log(`Point awarded manually to ${playerName} for ${guessType} guess: "${guessText}"`);
+      // Refresh scores and guesses after manual award
+      await getTrackStatus();
+      setGuessedParts(prev => ({ ...prev, [guessType]: true })); // Mark as guessed
+      alert(`Manual award awarded to ${playerName} for ${guessType} guess: "${guessText}"`);
+    } catch (error) {
+      console.error('Error awarding manual guess:', error);
+      alert('Failed to award manual guess. Please try again.');
+    }
+  };
+
+  const handleSaveScore = async () => {
+    if (!editingPlayer || !newScore) {
+      alert('Please select a player to edit and enter a new score.');
+      return;
+    }
+    try {
+      await axios.post('/api/update-score', { playerName: editingPlayer, newScore: parseInt(newScore) });
+      setScores(prev => ({ ...prev, [editingPlayer]: parseInt(newScore) }));
+      setEditingPlayer(null);
+      setNewScore('');
+      alert('Score updated successfully!');
+    } catch (error) {
+      console.error('Error saving score:', error);
+      alert('Failed to update score. Please try again.');
     }
   };
 
@@ -639,64 +716,71 @@ const AdminPage = () => {
                 <button className="btn btn-secondary" onClick={selectNewPlaylist} style={{ marginRight: '10px' }}>
                   Select New Playlist
                 </button>
+                <button className="btn btn-secondary" onClick={() => setPlaylistHidden(!playlistHidden)}>
+                  {playlistHidden ? 'Show Playlist' : 'Hide Playlist'}
+                </button>
               </div>
             </div>
-            
-            {/* Lyrics Scraping Controls */}
-            <div className="card mb-20">
-              <h3 className="subtitle">Lyrics Management</h3>
-              <p className="text-center mb-20">
-                Pre-fetch lyrics for all songs in the playlist to improve performance during gameplay.
-              </p>
-              
-              {!scrapingProgress.isScraping ? (
-                <div className="flex-center">
-                  <button className="btn" onClick={startLyricsScraping}>
-                    Scrape Lyrics
-                  </button>
-                </div>
-              ) : (
-                <div>
-                  <div className="flex-between mb-10">
-                    <span>Progress: {scrapingProgress.successfulCount}/{scrapingProgress.totalCount} songs scraped successfully</span>
-                    <button className="btn btn-danger" onClick={stopLyricsScraping}>
-                      Stop Scraping
-                    </button>
-                  </div>
-                  <div className="progress-bar-container">
-                    <div className="progress-bar">
-                      <div 
-                        className="progress-fill" 
-                        style={{ width: `${scrapingProgress.progress}%` }}
-                      ></div>
+            {!playlistHidden && (
+              <div className="player-list">
+                {tracks.map((item, index) => (
+                  <div key={item.track.id} className="player-item">
+                    <div>
+                      <strong>{index + 1}.</strong> {getStatusIcon(item.track.id)}{lyricsAvailability[item.track.id] === true ? '✔️' : lyricsAvailability[item.track.id] === false ? '❌' : ''} {item.track.name} - {item.track.artists.map(a => a.name).join(', ')}
                     </div>
+                    {lyricsAvailability[item.track.id] === false && manualLyricsTrackId !== item.track.id && (
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                        <button className="btn btn-secondary" onClick={() => setManualLyricsTrackId(item.track.id)}>
+                          + Lyrics
+                        </button>
+                        <button 
+                          className="btn"
+                          onClick={() => playTrack(item.track)}
+                          disabled={isPlaying && currentTrack?.id === item.track.id}
+                        >
+                          {isPlaying && currentTrack?.id === item.track.id ? 'Playing' : 'Play'}
+                        </button>
+                      </div>
+                    )}
+                    {lyricsAvailability[item.track.id] === false && manualLyricsTrackId === item.track.id && (
+                      <div>
+                        <textarea
+                          className="input"
+                          value={manualLyricsText}
+                          onChange={(e) => setManualLyricsText(e.target.value)}
+                          rows="3" cols="40" style={{ fontSize: '14px' }}
+                        />
+                        <div className="flex-center">
+                          <button className="btn btn-success" onClick={handleSaveManualLyrics}>
+                            Save Lyrics
+                          </button>
+                          <button className="btn btn-secondary" onClick={() => setManualLyricsTrackId(null)} style={{ marginLeft: '10px' }}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {lyricsAvailability[item.track.id] !== false && (
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                        <button 
+                          className="btn"
+                          onClick={() => playTrack(item.track)}
+                          disabled={isPlaying && currentTrack?.id === item.track.id}
+                        >
+                          {isPlaying && currentTrack?.id === item.track.id ? 'Playing' : 'Play'}
+                        </button>
+                      </div>
+                    )}
                   </div>
-                </div>
-              )}
-            </div>
-
-            <div className="player-list">
-              {tracks.map((item, index) => (
-                <div key={item.track.id} className="player-item">
-                  <div>
-                    <strong>{index + 1}.</strong> {getStatusIcon(item.track.id)} {item.track.name} - {item.track.artists.map(a => a.name).join(', ')}
-                  </div>
-                  <button 
-                    className="btn"
-                    onClick={() => playTrack(item.track)}
-                    disabled={isPlaying && currentTrack?.id === item.track.id}
-                  >
-                    {isPlaying && currentTrack?.id === item.track.id ? 'Playing' : 'Play'}
-                  </button>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
 
       {/* Playback Controls */}
-      {currentTrack && (
+      {!playlistHidden && currentTrack && (
         <div className="card">
           <h2 className="subtitle">Now Playing</h2>
           <div className="now-playing">
@@ -750,7 +834,7 @@ const AdminPage = () => {
       )}
 
       {/* Correct Answers */}
-      {currentTrack && (
+      {!playlistHidden && currentTrack && (
         <div className="card">
           <h2 className="subtitle">Correct Answers</h2>
           <div className="correct-answers">
@@ -781,7 +865,7 @@ const AdminPage = () => {
       )}
 
       {/* Player Guesses */}
-      {currentTrack && (
+      {!playlistHidden && currentTrack && (
         <div className="card">
           <h2 className="subtitle">Player Guesses</h2>
           <div className="grid">
@@ -815,9 +899,35 @@ const AdminPage = () => {
             {Object.entries(scores || {})
               .sort(([,a], [,b]) => b - a)
               .map(([name, score]) => (
-                <div key={name} className="player-item">
+                <div key={name} className="player-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>{name}</span>
-                  <span className="score">{score} points</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {editingPlayer === name ? (
+                      <input
+                        type="number"
+                        className="input"
+                        value={newScore}
+                        onChange={(e) => setNewScore(e.target.value)}
+                        style={{ width: '100px', marginBottom: 0, height: '40px'}}
+                      />
+                    ) : (
+                      <span className="score">{score} points</span>
+                    )}
+                    {editingPlayer === name ? (
+                      <div className="flex-center">
+                        <button className="btn btn-success" style={{ marginLeft: '10px', padding: '8px 16px' }} onClick={handleSaveScore}>
+                          Save
+                        </button>
+                        <button className="btn btn-secondary" style={{ marginLeft: '10px', padding: '8px 16px' }} onClick={() => setEditingPlayer(null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button className="btn btn-secondary" style={{ padding: '8px 16px' }} onClick={() => { setEditingPlayer(name); setNewScore(score.toString()); }}>
+                        Edit
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
           </div>
@@ -867,9 +977,6 @@ const AdminPage = () => {
           <button className="btn btn-secondary" onClick={checkDevices} style={{ marginRight: '10px' }}>
             Check Spotify Devices
           </button>
-          <button className="btn btn-secondary" onClick={checkLyricsConfig} style={{ marginRight: '10px' }}>
-            Check Lyrics Config
-          </button>
           <button className="btn btn-secondary" onClick={testLyricsAPI} style={{ marginRight: '10px' }}>
             Test Lyrics API
           </button>
@@ -878,6 +985,9 @@ const AdminPage = () => {
           </button>
           <button className="btn btn-secondary" onClick={testLyricsFetching}>
             Test Lyrics Fetching
+          </button>
+          <button className="btn btn-secondary" onClick={startLyricsScraping}>
+            Scrape Lyrics
           </button>
         </div>
         
@@ -900,6 +1010,24 @@ const AdminPage = () => {
             )}
           </div>
         )}
+        {scrapingProgress.isScraping ? (
+          <div style={{ width: '100%', marginTop: 20 }}>
+            <div className="flex-between mb-10">
+              <span>Progress: {scrapingProgress.successfulCount}/{scrapingProgress.totalCount} songs scraped successfully</span>
+              <button className="btn btn-danger" onClick={stopLyricsScraping}>
+                Stop Scraping
+              </button>
+            </div>
+            <div className="progress-bar-container">
+              <div className="progress-bar">
+                <div 
+                  className="progress-fill" 
+                  style={{ width: `${scrapingProgress.progress}%` }}
+                ></div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
