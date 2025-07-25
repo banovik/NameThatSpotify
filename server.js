@@ -10,11 +10,39 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
+
+// Memory optimization: Limit Socket.IO connections and enable compression
 const io = socketIo(server, {
   cors: {
     origin: process.env.FRONTEND_URL || "http://127.0.0.1:3001",
     methods: ["GET", "POST"]
+  },
+  // Memory optimization settings
+  maxHttpBufferSize: 1e6, // 1MB max message size
+  pingTimeout: 60000, // 60 seconds
+  pingInterval: 25000, // 25 seconds
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
+  // Enable compression to reduce bandwidth
+  perMessageDeflate: {
+    threshold: 32768, // Only compress messages larger than 32KB
+    zlibInflateOptions: {
+      chunkSize: 10 * 1024
+    }
   }
+});
+
+// Memory optimization: Set connection limits
+const MAX_CONNECTIONS = 250; // Allow some buffer over 200
+let currentConnections = 0;
+
+// Middleware to track connections
+io.use((socket, next) => {
+  if (currentConnections >= MAX_CONNECTIONS) {
+    return next(new Error('Server at maximum capacity. Please try again later.'));
+  }
+  currentConnections++;
+  next();
 });
 
 // Middleware
@@ -291,28 +319,73 @@ function cleanupExpiredBlocks() {
   }
 }
 
+// Memory monitoring and cleanup functions
+function logMemoryUsage() {
+  const memUsage = process.memoryUsage();
+  console.log(`🧠 Memory Usage - RSS: ${Math.round(memUsage.rss / 1024 / 1024)}MB, Heap: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB, External: ${Math.round(memUsage.external / 1024 / 1024)}MB`);
+}
+
+function cleanupMemory() {
+  // Force garbage collection if available
+  if (global.gc) {
+    global.gc();
+    console.log('🗑️ Forced garbage collection');
+  }
+  
+  // Clean up old guess data (keep only last 100 guesses per type)
+  ['artist', 'title', 'lyrics'].forEach(type => {
+    if (gameState.currentGuesses[type].length > 100) {
+      gameState.currentGuesses[type] = gameState.currentGuesses[type].slice(-100);
+    }
+  });
+  
+  // Clean up old song states (keep only last 50 songs)
+  const songStateKeys = Object.keys(gameState.songStates);
+  if (songStateKeys.length > 50) {
+    const keysToDelete = songStateKeys.slice(0, songStateKeys.length - 50);
+    keysToDelete.forEach(key => delete gameState.songStates[key]);
+    console.log(`🧹 Cleaned up ${keysToDelete.length} old song states`);
+  }
+  
+  logMemoryUsage();
+}
+
+// Periodic memory cleanup (every 5 minutes)
+setInterval(cleanupMemory, 300000);
+
+// Memory usage logging (every 2 minutes)
+setInterval(logMemoryUsage, 120000);
+
 // Check game code expiry every minute
 setInterval(checkGameCodeExpiry, 60000);
 
 // Clean up expired IP blocks every 5 minutes
 setInterval(cleanupExpiredBlocks, 300000);
 
-// Set up SQLite database for lyrics caching
-const dbPath = path.join(__dirname, 'lyrics.db');
-const lyricsDb = new sqlite3.Database(dbPath, (err) => {
+// Initialize SQLite database with memory optimization
+const db = new sqlite3.Database('./lyrics.db', (err) => {
   if (err) {
-    console.error('Failed to connect to lyrics.db:', err);
+    console.error('Error opening database:', err.message);
   } else {
-    console.log('Connected to lyrics.db');
+    console.log('Connected to the SQLite database.');
+    // Memory optimization: Set database configuration
+    db.configure('busyTimeout', 30000); // 30 second timeout
+    db.run('PRAGMA journal_mode = WAL;'); // Write-Ahead Logging for better concurrency
+    db.run('PRAGMA synchronous = NORMAL;'); // Faster writes
+    db.run('PRAGMA cache_size = -2000;'); // 2MB cache (negative = KB)
+    db.run('PRAGMA temp_store = MEMORY;'); // Store temp tables in memory
+    db.run('PRAGMA mmap_size = 268435456;'); // 256MB memory mapping
+    
+    // Create lyrics cache table if it doesn't exist
+    db.run(`CREATE TABLE IF NOT EXISTS lyrics_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      artist TEXT NOT NULL,
+      title TEXT NOT NULL,
+      lyrics TEXT NOT NULL,
+      UNIQUE(artist, title)
+    )`);
   }
 });
-lyricsDb.run(`CREATE TABLE IF NOT EXISTS lyrics_cache (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  artist TEXT NOT NULL,
-  title TEXT NOT NULL,
-  lyrics TEXT NOT NULL,
-  UNIQUE(artist, title)
-)`);
 
 // Function to fetch lyrics from local DB or API
 async function fetchLyrics(artistName, songTitle) {
@@ -321,7 +394,7 @@ async function fetchLyrics(artistName, songTitle) {
 
   // Try to get lyrics from local DB first
   const getLyricsFromDb = () => new Promise((resolve, reject) => {
-    lyricsDb.get(
+    db.get(
       'SELECT lyrics FROM lyrics_cache WHERE artist = ? AND title = ?',
       [normalizedArtist, normalizedTitle],
       (err, row) => {
@@ -357,7 +430,7 @@ async function fetchLyrics(artistName, songTitle) {
       if (lyrics.length > 0) {
         console.log(`✅ Successfully fetched lyrics (${lyrics.length} characters)`);
         // Store in DB for future use
-        lyricsDb.run(
+        db.run(
           'INSERT OR IGNORE INTO lyrics_cache (artist, title, lyrics) VALUES (?, ?, ?)',
           [normalizedArtist, normalizedTitle, lyrics],
           (err) => {
@@ -473,10 +546,283 @@ async function fetchAllPlaylistTracks(playlistId) {
   }
 }
 
+// Security and input validation functions
+function sanitizeInput(input, maxLength = 1000) {
+  if (typeof input !== 'string') return '';
+  
+  // Remove null bytes and control characters
+  let sanitized = input
+    .replace(/\0/g, '') // Remove null bytes
+    .replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
+    .trim();
+  
+  // Limit length
+  if (sanitized.length > maxLength) {
+    sanitized = sanitized.substring(0, maxLength);
+  }
+  
+  return sanitized;
+}
+
+function validatePlayerName(playerName) {
+  if (!playerName || typeof playerName !== 'string') {
+    return { valid: false, error: 'Player name is required' };
+  }
+  
+  const sanitized = sanitizeInput(playerName, 32);
+  
+  if (sanitized.length < 1) {
+    return { valid: false, error: 'Player name cannot be empty' };
+  }
+  
+  if (sanitized.length > 32) {
+    return { valid: false, error: 'Player name must be 32 characters or less' };
+  }
+  
+  // Check for SQL injection patterns
+  const sqlPatterns = [
+    /(\b(union|select|insert|update|delete|drop|create|alter|exec|execute|script|javascript|vbscript|onload|onerror|onclick)\b)/i,
+    /(['"`;])/,
+    /(--|\/\*|\*\/)/,
+    /(xp_|sp_)/i,
+    /(0x[0-9a-f]+)/i
+  ];
+  
+  for (const pattern of sqlPatterns) {
+    if (pattern.test(sanitized)) {
+      return { valid: false, error: 'Player name contains invalid characters' };
+    }
+  }
+  
+  // Check for XSS patterns
+  const xssPatterns = [
+    /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+    /javascript:/gi,
+    /vbscript:/gi,
+    /on\w+\s*=/gi,
+    /<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi,
+    /<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi,
+    /<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi,
+    /<link\b[^<]*(?:(?!<\/link>)<[^<]*)*<\/link>/gi,
+    /<meta\b[^<]*(?:(?!<\/meta>)<[^<]*)*<\/meta>/gi
+  ];
+  
+  for (const pattern of xssPatterns) {
+    if (pattern.test(sanitized)) {
+      return { valid: false, error: 'Player name contains invalid characters' };
+    }
+  }
+  
+  // Check for command injection patterns
+  const commandPatterns = [
+    /(\b(cmd|command|powershell|bash|sh|exec|system|eval|Function|setTimeout|setInterval)\b)/i,
+    /[;&|`$(){}[\]]/,
+    /(\$\{[^}]+\})/,
+    /(\\x[0-9a-f]{2})/i
+  ];
+  
+  for (const pattern of commandPatterns) {
+    if (pattern.test(sanitized)) {
+      return { valid: false, error: 'Player name contains invalid characters' };
+    }
+  }
+  
+  return { valid: true, sanitized };
+}
+
+function validateGuess(guess, type) {
+  if (!guess || typeof guess !== 'string') {
+    return { valid: false, error: `${type} guess is required` };
+  }
+  
+  const sanitized = sanitizeInput(guess, 100);
+  
+  if (sanitized.length < 1) {
+    return { valid: false, error: `${type} guess cannot be empty` };
+  }
+  
+  if (sanitized.length > 100) {
+    return { valid: false, error: `${type} guess must be 100 characters or less` };
+  }
+  
+  // Check for SQL injection patterns (less restrictive for guesses)
+  const sqlPatterns = [
+    /(\b(union|select|insert|update|delete|drop|create|alter|exec|execute|script|javascript|vbscript|onload|onerror|onclick)\b)/i,
+    /(`)/, // Only block backticks, allow apostrophes and quotes in guesses
+    /(--|\/\*|\*\/)/,
+    /(xp_|sp_)/i,
+    /(0x[0-9a-f]+)/i
+  ];
+  
+  for (const pattern of sqlPatterns) {
+    if (pattern.test(sanitized)) {
+      return { valid: false, error: `${type} guess contains invalid characters` };
+    }
+  }
+  
+  // Check for XSS patterns
+  const xssPatterns = [
+    /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+    /javascript:/gi,
+    /vbscript:/gi,
+    /on\w+\s*=/gi,
+    /<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi,
+    /<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi,
+    /<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi,
+    /<link\b[^<]*(?:(?!<\/link>)<[^<]*)*<\/link>/gi,
+    /<meta\b[^<]*(?:(?!<\/meta>)<[^<]*)*<\/meta>/gi
+  ];
+  
+  for (const pattern of xssPatterns) {
+    if (pattern.test(sanitized)) {
+      return { valid: false, error: `${type} guess contains invalid characters` };
+    }
+  }
+  
+  // Check for command injection patterns (less restrictive for guesses)
+  const commandPatterns = [
+    /(\b(cmd|command|powershell|bash|sh|exec|system|eval|Function|setTimeout|setInterval)\b)/i,
+    /[|`${}]/, // Removed ; & ( ) [ ] as they're common in guesses
+    /(\$\{[^}]+\})/,
+    /(\\x[0-9a-f]{2})/i
+  ];
+  
+  for (const pattern of commandPatterns) {
+    if (pattern.test(sanitized)) {
+      return { valid: false, error: `${type} guess contains invalid characters` };
+    }
+  }
+  
+  return { valid: true, sanitized };
+}
+
+function validateLyrics(lyrics) {
+  if (!lyrics || typeof lyrics !== 'string') {
+    return { valid: false, error: 'Lyrics are required' };
+  }
+  
+  const sanitized = sanitizeInput(lyrics, 50000); // Allow longer lyrics
+  
+  if (sanitized.length < 1) {
+    return { valid: false, error: 'Lyrics cannot be empty' };
+  }
+  
+  if (sanitized.length > 50000) {
+    return { valid: false, error: 'Lyrics must be 50,000 characters or less' };
+  }
+  
+  // Check for SQL injection patterns (less restrictive for lyrics)
+  const sqlPatterns = [
+    /(\b(union|select|insert|update|delete|drop|create|alter|exec|execute|script|javascript|vbscript|onload|onerror|onclick)\b)/i,
+    /(`)/, // Only block backticks, allow apostrophes and quotes in lyrics
+    /(--|\/\*|\*\/)/,
+    /(xp_|sp_)/i,
+    /(0x[0-9a-f]+)/i
+  ];
+  
+  for (const pattern of sqlPatterns) {
+    if (pattern.test(sanitized)) {
+      return { valid: false, error: 'Lyrics contain invalid characters' };
+    }
+  }
+  
+  // Check for XSS patterns
+  const xssPatterns = [
+    /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+    /javascript:/gi,
+    /vbscript:/gi,
+    /on\w+\s*=/gi,
+    /<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi,
+    /<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi,
+    /<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi,
+    /<link\b[^<]*(?:(?!<\/link>)<[^<]*)*<\/link>/gi,
+    /<meta\b[^<]*(?:(?!<\/meta>)<[^<]*)*<\/meta>/gi
+  ];
+  
+  for (const pattern of xssPatterns) {
+    if (pattern.test(sanitized)) {
+      return { valid: false, error: 'Lyrics contain invalid characters' };
+    }
+  }
+  
+  // Check for command injection patterns (less restrictive for lyrics)
+  const commandPatterns = [
+    /(\b(cmd|command|powershell|bash|sh|exec|system|eval|Function|setTimeout|setInterval)\b)/i,
+    /[|`${}]/, // Removed ; & ( ) [ ] as they're common in lyrics
+    /(\$\{[^}]+\})/,
+    /(\\x[0-9a-f]{2})/i
+  ];
+  
+  for (const pattern of commandPatterns) {
+    if (pattern.test(sanitized)) {
+      return { valid: false, error: 'Lyrics contain invalid characters' };
+    }
+  }
+  
+  return { valid: true, sanitized };
+}
+
+function validateGameCode(gameCode) {
+  if (!gameCode || typeof gameCode !== 'string') {
+    return { valid: false, error: 'Game code is required' };
+  }
+  
+  const sanitized = sanitizeInput(gameCode, 8);
+  
+  if (sanitized.length !== 6) {
+    return { valid: false, error: 'Game code must be 6 digits' };
+  }
+  
+  if (!/^\d{6}$/.test(sanitized)) {
+    return { valid: false, error: 'Game code must contain only digits' };
+  }
+  
+  return { valid: true, sanitized };
+}
+
+function validateAdminPassword(password) {
+  if (!password || typeof password !== 'string') {
+    return { valid: false, error: 'Admin password is required' };
+  }
+  
+  const sanitized = sanitizeInput(password, 100);
+  
+  if (sanitized.length < 1) {
+    return { valid: false, error: 'Admin password cannot be empty' };
+  }
+  
+  if (sanitized.length > 100) {
+    return { valid: false, error: 'Admin password must be 100 characters or less' };
+  }
+  
+  // Check for SQL injection patterns
+  const sqlPatterns = [
+    /(\b(union|select|insert|update|delete|drop|create|alter|exec|execute|script|javascript|vbscript|onload|onerror|onclick)\b)/i,
+    /(['"`;])/,
+    /(--|\/\*|\*\/)/,
+    /(xp_|sp_)/i,
+    /(0x[0-9a-f]+)/i
+  ];
+  
+  for (const pattern of sqlPatterns) {
+    if (pattern.test(sanitized)) {
+      return { valid: false, error: 'Admin password contains invalid characters' };
+    }
+  }
+  
+  return { valid: true, sanitized };
+}
+
 // Admin password verification
 app.post('/api/verify-admin', (req, res) => {
   const { password } = req.body;
   const adminPassword = process.env.ADMIN_PASSWORD;
+  
+  // Validate input
+  const validation = validateAdminPassword(password);
+  if (!validation.valid) {
+    return res.status(400).json({ error: validation.error });
+  }
   
   // Check brute force protection
   const protection = checkBruteForceProtection('adminPassword');
@@ -488,7 +834,7 @@ app.post('/api/verify-admin', (req, res) => {
     return res.status(500).json({ error: 'Admin password not configured' });
   }
   
-  if (password === adminPassword) {
+  if (validation.sanitized === adminPassword) {
     // Reset failed attempts on successful login
     resetFailedAttempts('adminPassword');
     
@@ -509,6 +855,13 @@ app.post('/api/verify-admin', (req, res) => {
 app.post('/api/verify-game-code', (req, res) => {
   const { gameCode } = req.body;
   
+  // Validate input
+  const validation = validateGameCode(gameCode);
+  if (!validation.valid) {
+    recordFailedAttempt('gameCode');
+    return res.status(400).json({ error: validation.error });
+  }
+  
   // Check if IP is blocked
   if (isIpBlocked(req.ip)) {
     const blockInfo = getBlockedIpInfo(req.ip);
@@ -524,11 +877,11 @@ app.post('/api/verify-game-code', (req, res) => {
   }
   
   if (!gameState.gameCode) {
+    recordFailedAttempt('gameCode');
     return res.status(400).json({ error: 'No active game session' });
   }
   
-  if (gameState.gameCode !== gameCode) {
-    // Record failed attempt
+  if (gameState.gameCode !== validation.sanitized) {
     recordFailedAttempt('gameCode');
     return res.status(401).json({ error: 'Invalid game code' });
   }
@@ -536,6 +889,7 @@ app.post('/api/verify-game-code', (req, res) => {
   // Check if game code has expired
   if (gameState.gameCodeExpiry && Date.now() > gameState.gameCodeExpiry) {
     resetGameCode();
+    recordFailedAttempt('gameCode');
     return res.status(400).json({ error: 'Game session has expired' });
   }
   
@@ -554,6 +908,11 @@ app.post('/api/kick-player', (req, res) => {
   
   if (!socketId) {
     return res.status(400).json({ error: 'Socket ID is required' });
+  }
+  
+  // Validate socket ID format (should be alphanumeric)
+  if (typeof socketId !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(socketId)) {
+    return res.status(400).json({ error: 'Invalid socket ID format' });
   }
   
   const result = kickPlayer(socketId, reason || 'Admin kick');
@@ -855,17 +1214,26 @@ app.post('/api/reset-scores', (req, res) => {
 
 app.post('/api/update-score', (req, res) => {
   const { playerName, newScore } = req.body;
+  
+  // Validate inputs
   if (!playerName || newScore === undefined || newScore === null) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
+  
+  const playerNameValidation = validatePlayerName(playerName);
+  if (!playerNameValidation.valid) {
+    return res.status(400).json({ error: playerNameValidation.error });
+  }
+  
   if (typeof newScore !== 'number' || newScore < 0) {
     return res.status(400).json({ error: 'Invalid score value' });
   }
+  
   // Update the player's score
-  gameState.scores[playerName] = newScore;
-  console.log(`Score updated for ${playerName}: ${newScore}`);
+  gameState.scores[playerNameValidation.sanitized] = newScore;
+  console.log(`Score updated for ${playerNameValidation.sanitized}: ${newScore}`);
   // Notify all clients of the score update
-  io.emit('scoresUpdated', { scores: gameState.scores });
+      // Score update is handled via the scoresReset event
   res.json({ success: true });
 });
 
@@ -981,7 +1349,7 @@ async function scrapeLyricsForPlaylist() {
       const title = trackItem.track.name;
       const normalizedArtist = normalizeArtist(artist);
       const normalizedTitle = normalizeTitle(title);
-      lyricsDb.get(
+      db.get(
         'SELECT lyrics FROM lyrics_cache WHERE artist = ? AND title = ?',
         [normalizedArtist, normalizedTitle],
         (err, row) => {
@@ -1291,7 +1659,7 @@ app.post('/api/lyrics-availability', async (req, res) => {
     }
     const normalizedArtist = normalizeArtist(song.artist);
     const normalizedTitle = normalizeTitle(song.title);
-    lyricsDb.get(
+    db.get(
       'SELECT lyrics FROM lyrics_cache WHERE artist = ? AND title = ?',
       [normalizedArtist, normalizedTitle],
       (err, row) => {
@@ -1307,19 +1675,114 @@ app.post('/api/lyrics-availability', async (req, res) => {
 
 app.post('/api/manual-lyrics', async (req, res) => {
   const { id, artist, title, lyrics } = req.body;
+  
+  console.log('Manual lyrics request:', { id, artist, title, lyricsLength: lyrics ? lyrics.length : 0 });
+  
+  // Validate all inputs
   if (!id || !artist || !title || !lyrics) {
+    console.log('Missing required fields:', { id: !!id, artist: !!artist, title: !!title, lyrics: !!lyrics });
     return res.status(400).json({ error: 'Missing required fields' });
   }
-  const normalizedArtist = normalizeArtist(artist);
-  const normalizedTitle = normalizeTitle(title);
-  lyricsDb.run(
+  
+  const artistValidation = validateGuess(artist, 'artist');
+  const titleValidation = validateGuess(title, 'title');
+  const lyricsValidation = validateLyrics(lyrics);
+  
+  console.log('Validation results:', {
+    artist: artistValidation.valid,
+    title: titleValidation.valid,
+    lyrics: lyricsValidation.valid
+  });
+  
+  if (!artistValidation.valid) {
+    console.log('Artist validation failed:', artistValidation.error);
+    return res.status(400).json({ error: artistValidation.error });
+  }
+  
+  if (!titleValidation.valid) {
+    console.log('Title validation failed:', titleValidation.error);
+    return res.status(400).json({ error: titleValidation.error });
+  }
+  
+  if (!lyricsValidation.valid) {
+    console.log('Lyrics validation failed:', lyricsValidation.error);
+    return res.status(400).json({ error: lyricsValidation.error });
+  }
+  
+  const normalizedArtist = normalizeArtist(artistValidation.sanitized);
+  const normalizedTitle = normalizeTitle(titleValidation.sanitized);
+  
+  console.log('Saving lyrics to DB:', {
+    normalizedArtist,
+    normalizedTitle,
+    lyricsLength: lyricsValidation.sanitized.length
+  });
+  
+  db.run(
     'INSERT OR REPLACE INTO lyrics_cache (artist, title, lyrics) VALUES (?, ?, ?)',
-    [normalizedArtist, normalizedTitle, lyrics],
+    [normalizedArtist, normalizedTitle, lyricsValidation.sanitized],
     function (err) {
       if (err) {
         console.error('Failed to save manual lyrics:', err);
         return res.status(500).json({ error: 'Failed to save lyrics' });
       }
+      console.log('Successfully saved manual lyrics');
+      return res.json({ success: true });
+    }
+  );
+});
+
+app.post('/api/save-edited-lyrics', async (req, res) => {
+  const { trackId, lyrics } = req.body;
+  
+  console.log('Save edited lyrics request:', { trackId, lyricsLength: lyrics ? lyrics.length : 0 });
+  
+  // Validate inputs
+  if (!trackId || !lyrics) {
+    console.log('Missing required fields:', { trackId: !!trackId, lyrics: !!lyrics });
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+  
+  // Validate lyrics using the same validation as manual lyrics
+  const lyricsValidation = validateLyrics(lyrics);
+  
+  console.log('Lyrics validation result:', {
+    valid: lyricsValidation.valid,
+    error: lyricsValidation.error
+  });
+  
+  if (!lyricsValidation.valid) {
+    console.log('Lyrics validation failed:', lyricsValidation.error);
+    return res.status(400).json({ error: lyricsValidation.error });
+  }
+  
+  // Get the current song info to extract artist and title
+  if (!gameState.currentSong || gameState.currentSong.id !== trackId) {
+    return res.status(400).json({ error: 'Current song not found' });
+  }
+  
+  const artist = gameState.currentSong.artists.join(', ');
+  const title = gameState.currentSong.name;
+  
+  const normalizedArtist = normalizeArtist(artist);
+  const normalizedTitle = normalizeTitle(title);
+  
+  console.log('Saving edited lyrics to DB:', {
+    trackId,
+    normalizedArtist,
+    normalizedTitle,
+    lyricsLength: lyricsValidation.sanitized.length
+  });
+  
+  db.run(
+    'INSERT OR REPLACE INTO lyrics_cache (artist, title, lyrics) VALUES (?, ?, ?)',
+    [normalizedArtist, normalizedTitle, lyricsValidation.sanitized],
+    function (err) {
+      if (err) {
+        console.error('Failed to save edited lyrics:', err);
+        return res.status(500).json({ error: 'Failed to save lyrics' });
+      }
+      console.log('Successfully saved edited lyrics');
       return res.json({ success: true });
     }
   );
@@ -1327,8 +1790,26 @@ app.post('/api/manual-lyrics', async (req, res) => {
 
 app.post('/api/manual-award', (req, res) => {
   const { playerName, guessType, guessText } = req.body;
+  
+  // Validate inputs
   if (!playerName || !guessType || !guessText) {
     return res.status(400).json({ error: 'Missing required fields' });
+  }
+  
+  const playerNameValidation = validatePlayerName(playerName);
+  const guessTextValidation = validateGuess(guessText, guessType);
+  
+  if (!playerNameValidation.valid) {
+    return res.status(400).json({ error: playerNameValidation.error });
+  }
+  
+  if (!guessTextValidation.valid) {
+    return res.status(400).json({ error: guessTextValidation.error });
+  }
+  
+  // Validate guess type
+  if (!['artist', 'title', 'lyrics'].includes(guessType)) {
+    return res.status(400).json({ error: 'Invalid guess type' });
   }
   if (!gameState.currentSong) {
     return res.status(400).json({ error: 'No current song' });
@@ -1337,17 +1818,17 @@ app.post('/api/manual-award', (req, res) => {
     return res.status(400).json({ error: 'This category has already been guessed' });
   }
   // Award point to player
-  gameState.scores[playerName] = (gameState.scores[playerName] || 0) + 1;
+  gameState.scores[playerNameValidation.sanitized] = (gameState.scores[playerNameValidation.sanitized] || 0) + 1;
   // Mark category as guessed
   gameState.guessedParts[guessType] = true;
   // Track that this player made a correct guess
-  gameState.playersWhoGuessed.add(playerName);
+  gameState.playersWhoGuessed.add(playerNameValidation.sanitized);
   // Check if all parts are now guessed
   const allPartsGuessed = gameState.guessedParts.artist && gameState.guessedParts.title && (gameState.guessedParts.lyrics === true || gameState.guessedParts.lyrics === null);
   // Award bonus if this player just completed all parts alone
   let bonusAwarded = false;
   if (allPartsGuessed && !gameState.bonusAwarded && gameState.playersWhoGuessed.size === 1) {
-    gameState.scores[playerName]++;
+    gameState.scores[playerNameValidation.sanitized]++;
     gameState.bonusAwarded = true;
     bonusAwarded = true;
   }
@@ -1371,7 +1852,7 @@ app.post('/api/manual-award', (req, res) => {
   }
   // Notify all clients
   io.emit('correctGuess', { 
-    playerName, 
+    playerName: playerNameValidation.sanitized, 
     players: gameState.players, 
     scores: gameState.scores,
     guessedParts: gameState.guessedParts,
@@ -1379,7 +1860,7 @@ app.post('/api/manual-award', (req, res) => {
     allPartsGuessed,
     bonusAwarded
   });
-  console.log(`Manual award: ${playerName} earned 1 point for ${guessType} guess: "${guessText}"${bonusAwarded ? ' + 1 bonus point' : ''}`);
+  console.log(`Manual award: ${playerNameValidation.sanitized} earned 1 point for ${guessType} guess: "${guessTextValidation.sanitized}"${bonusAwarded ? ' + 1 bonus point' : ''}`);
   res.json({ success: true });
 });
 
@@ -1413,32 +1894,26 @@ io.on('connection', (socket) => {
     guessedParts: gameState.guessedParts
   });
   
-  // Game code verification for players
-  socket.on('verifyGameCode', (gameCode) => {
-    if (!gameState.gameCode) {
-      socket.emit('gameCodeInvalid', { error: 'No active game session' });
-      return;
-    }
-    
-    if (gameState.gameCode !== gameCode) {
-      socket.emit('gameCodeInvalid', { error: 'Invalid game code' });
-      return;
-    }
-    
-    // Check if game code has expired
-    if (gameState.gameCodeExpiry && Date.now() > gameState.gameCodeExpiry) {
-      resetGameCode();
-      socket.emit('gameCodeInvalid', { error: 'Game session has expired' });
-      return;
-    }
-    
-    socket.emit('gameCodeValid');
-  });
+  // Game code verification is now handled via HTTP endpoint /api/verify-game-code
   
   // Player joins
   socket.on('playerJoin', (data) => {
     const { playerName, gameCode } = data;
     console.log(`Player attempting to join: ${playerName} (socket: ${socket.id})`);
+    
+    // Validate player name
+    const nameValidation = validatePlayerName(playerName);
+    if (!nameValidation.valid) {
+      socket.emit('validationError', { error: nameValidation.error });
+      return;
+    }
+    
+    // Validate game code
+    const codeValidation = validateGameCode(gameCode);
+    if (!codeValidation.valid) {
+      socket.emit('gameCodeInvalid', { error: codeValidation.error });
+      return;
+    }
     
     // Verify game code first
     if (!gameState.gameCode) {
@@ -1446,7 +1921,7 @@ io.on('connection', (socket) => {
       return;
     }
     
-    if (gameState.gameCode !== gameCode) {
+    if (gameState.gameCode !== codeValidation.sanitized) {
       socket.emit('gameCodeInvalid', { error: 'Invalid game code' });
       return;
     }
@@ -1490,8 +1965,8 @@ io.on('connection', (socket) => {
     }
     
     // Username is available or this is a reconnection
-    gameState.players[socket.id] = playerName;
-    gameState.activeUsernames.add(playerName);
+    gameState.players[socket.id] = nameValidation.sanitized;
+    gameState.activeUsernames.add(nameValidation.sanitized);
     
     // Initialize score if this is a new player, otherwise keep existing score
     if (!gameState.scores[playerName]) {
@@ -1521,39 +1996,67 @@ io.on('connection', (socket) => {
     gameState.lastGuessTimestamps[playerName] = now;
     // --- END RATE LIMITING ---
 
+    // Memory optimization: Clean up old timestamps (older than 1 hour)
+    const oneHourAgo = now - 3600000;
+    Object.keys(gameState.lastGuessTimestamps).forEach(player => {
+      if (gameState.lastGuessTimestamps[player] < oneHourAgo) {
+        delete gameState.lastGuessTimestamps[player];
+      }
+    });
+
     const { artist, title, lyrics } = guess;
     let correctParts = [];
     let allPartsGuessed = true;
     let validationError = null;
     
+    // Validate all guesses
+    const artistValidation = artist ? validateGuess(artist, 'artist') : { valid: true, sanitized: '' };
+    const titleValidation = title ? validateGuess(title, 'title') : { valid: true, sanitized: '' };
+    const lyricsValidation = lyrics ? validateGuess(lyrics, 'lyrics') : { valid: true, sanitized: '' };
+    
+    if (!artistValidation.valid) {
+      socket.emit('validationError', { error: artistValidation.error });
+      return;
+    }
+    
+    if (!titleValidation.valid) {
+      socket.emit('validationError', { error: titleValidation.error });
+      return;
+    }
+    
+    if (!lyricsValidation.valid) {
+      socket.emit('validationError', { error: lyricsValidation.error });
+      return;
+    }
+    
     // Track all guesses (both correct and incorrect)
     const timestamp = new Date();
-    if (artist && artist.trim()) {
+    if (artistValidation.sanitized) {
       gameState.currentGuesses.artist.push({
-        guess: artist.trim(),
+        guess: artistValidation.sanitized,
         player: playerName,
         timestamp: timestamp
       });
     }
-    if (title && title.trim()) {
+    if (titleValidation.sanitized) {
       gameState.currentGuesses.title.push({
-        guess: title.trim(),
+        guess: titleValidation.sanitized,
         player: playerName,
         timestamp: timestamp
       });
     }
-    if (lyrics && lyrics.trim()) {
+    if (lyricsValidation.sanitized) {
       gameState.currentGuesses.lyrics.push({
-        guess: lyrics.trim(),
+        guess: lyricsValidation.sanitized,
         player: playerName,
         timestamp: timestamp
       });
     }
     
     // Check artist guess
-    if (artist && !gameState.guessedParts.artist) {
+    if (artistValidation.sanitized && !gameState.guessedParts.artist) {
       // Normalize the guess for comparison
-      const normalizedGuess = normalizeArtist(artist);
+      const normalizedGuess = normalizeArtist(artistValidation.sanitized);
       
       // Check against all artists in the song
       const correctArtist = gameState.currentSong.artists.find(a => {
@@ -1600,6 +2103,46 @@ io.on('connection', (socket) => {
             isCorrect = concatenatedActual === concatenatedGuess;
           }
           
+          // Handle cases where user types some words concatenated (e.g., "boxcar racer" for "Box Car Racer")
+          if (!isCorrect && guessWords.length > 0 && actualWords.length > 0) {
+            // Create all possible concatenated versions of actual words
+            const concatenatedActuals = [];
+            for (let i = 0; i < actualWords.length - 1; i++) {
+              concatenatedActuals.push(actualWords[i] + actualWords[i + 1]);
+            }
+            
+            // Check if any guess word matches any concatenated actual word
+            const hasConcatenatedMatch = guessWords.some(guessWord => 
+              concatenatedActuals.includes(guessWord)
+            );
+            
+            // Check if all remaining words match
+            if (hasConcatenatedMatch) {
+              // Find which concatenated word was matched
+              const matchedConcatenated = guessWords.find(guessWord => 
+                concatenatedActuals.includes(guessWord)
+              );
+              
+              if (matchedConcatenated) {
+                // Find the indices of the words that were concatenated
+                const concatenatedIndex = concatenatedActuals.indexOf(matchedConcatenated);
+                const remainingActualWords = actualWords.filter((_, index) => 
+                  index !== concatenatedIndex && index !== concatenatedIndex + 1
+                );
+                const remainingGuessWords = guessWords.filter(word => word !== matchedConcatenated);
+                
+                // Check if remaining words match
+                const remainingWordsMatch = remainingActualWords.every(actualWord =>
+                  remainingGuessWords.includes(actualWord)
+                );
+                
+                if (remainingWordsMatch) {
+                  isCorrect = true;
+                }
+              }
+            }
+          }
+          
           // For partial matches, require that the guess contains at least 90% of the artist words
           // and that the missing words are not significant (e.g., "the", "a", "an")
           if (!isCorrect && guessWords.length < actualWords.length) {
@@ -1631,15 +2174,15 @@ io.on('connection', (socket) => {
         gameState.guessedParts.artist = true;
         gameState.scores[playerName]++;
         correctParts.push('artist');
-        console.log(`🎤 Artist guessed correctly by ${playerName}: ${artist} (matched: ${correctArtist}, normalized: ${normalizedGuess})`);
+        console.log(`🎤 Artist guessed correctly by ${playerName}: ${artistValidation.sanitized} (matched: ${correctArtist}, normalized: ${normalizedGuess})`);
       }
     }
     
     // Check title guess
-    if (title && !gameState.guessedParts.title) {
+    if (titleValidation.sanitized && !gameState.guessedParts.title) {
       // Normalize both the actual title and the guess for comparison
       const normalizedActualTitle = normalizeTitle(gameState.currentSong.name);
-      const normalizedGuess = normalizeTitle(title);
+      const normalizedGuess = normalizeTitle(titleValidation.sanitized);
       
       // Split into words for better comparison
       const actualWords = normalizedActualTitle.split(/\s+/).filter(word => word.length > 0);
@@ -1682,6 +2225,46 @@ io.on('connection', (socket) => {
           isCorrect = concatenatedActual === concatenatedGuess;
         }
         
+        // Handle cases where user types some words concatenated (e.g., "cantstop me" for "Can't Stop Me")
+        if (!isCorrect && guessWords.length > 0 && actualWords.length > 0) {
+          // Create all possible concatenated versions of actual words
+          const concatenatedActuals = [];
+          for (let i = 0; i < actualWords.length - 1; i++) {
+            concatenatedActuals.push(actualWords[i] + actualWords[i + 1]);
+          }
+          
+          // Check if any guess word matches any concatenated actual word
+          const hasConcatenatedMatch = guessWords.some(guessWord => 
+            concatenatedActuals.includes(guessWord)
+          );
+          
+          // Check if all remaining words match
+          if (hasConcatenatedMatch) {
+            // Find which concatenated word was matched
+            const matchedConcatenated = guessWords.find(guessWord => 
+              concatenatedActuals.includes(guessWord)
+            );
+            
+            if (matchedConcatenated) {
+              // Find the indices of the words that were concatenated
+              const concatenatedIndex = concatenatedActuals.indexOf(matchedConcatenated);
+              const remainingActualWords = actualWords.filter((_, index) => 
+                index !== concatenatedIndex && index !== concatenatedIndex + 1
+              );
+              const remainingGuessWords = guessWords.filter(word => word !== matchedConcatenated);
+              
+              // Check if remaining words match
+              const remainingWordsMatch = remainingActualWords.every(actualWord =>
+                remainingGuessWords.includes(actualWord)
+              );
+              
+              if (remainingWordsMatch) {
+                isCorrect = true;
+              }
+            }
+          }
+        }
+        
         // For partial matches, require that the guess contains at least 90% of the title words
         // and that the missing words are not significant (e.g., "the", "a", "an")
         if (!isCorrect && guessWords.length < actualWords.length) {
@@ -1715,11 +2298,11 @@ io.on('connection', (socket) => {
     }
     
     // Check lyrics guess
-    if (lyrics && gameState.guessedParts.lyrics !== null) {
+    if (lyricsValidation.sanitized && gameState.guessedParts.lyrics !== null) {
       // Check if lyrics are available for guessing
       if (!gameState.guessedParts.lyrics) {
         // Check minimum length requirement (12 letters)
-        const letterCount = countLetters(lyrics);
+        const letterCount = countLetters(lyricsValidation.sanitized);
         if (letterCount < 12) {
           validationError = `Lyrics guess must be at least 12 letters long (you have ${letterCount})`;
           socket.emit('validationError', { error: validationError });
@@ -1728,7 +2311,7 @@ io.on('connection', (socket) => {
         
         // Normalize both the lyrics and the guess for comparison
         const normalizedLyrics = normalizeText(gameState.currentSong.lyrics);
-        const normalizedGuess = normalizeText(lyrics);
+        const normalizedGuess = normalizeText(lyricsValidation.sanitized);
         
         if (normalizedLyrics.includes(normalizedGuess)) {
           gameState.guessedParts.lyrics = true;
@@ -1737,7 +2320,7 @@ io.on('connection', (socket) => {
           console.log(`📝 Lyrics guessed correctly by ${playerName}: ${lyrics}`);
         }
       }
-    } else if (lyrics && gameState.guessedParts.lyrics === null) {
+    } else if (lyricsValidation.sanitized && gameState.guessedParts.lyrics === null) {
       // Lyrics are not available, inform the player
       socket.emit('validationError', { error: 'Lyrics are not available for this song. You cannot guess lyrics.' });
       return;
@@ -1845,7 +2428,11 @@ io.on('connection', (socket) => {
     
     // Clean up IP tracking
     gameState.socketToIp.delete(socket.id);
-    console.log(`Socket ${socket.id} disconnected`);
+    
+    // Memory optimization: Decrease connection count
+    currentConnections = Math.max(0, currentConnections - 1);
+    
+    console.log(`Socket ${socket.id} disconnected. Active connections: ${currentConnections}`);
   });
 });
 

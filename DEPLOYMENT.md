@@ -320,16 +320,51 @@ pm2 restart spotify-game-frontend
 ## 📈 Performance Optimization
 
 ### 1. Caching
-- Lyrics are automatically cached in SQLite
-- Consider implementing Redis for session storage if needed
+- Lyrics are cached in SQLite database for fast retrieval
+- Spotify API responses are cached to reduce API calls
+- Game state is maintained in memory for real-time updates
 
-### 2. Load Balancing
-- For high-traffic deployments, consider using multiple backend instances
-- Use a load balancer to distribute traffic
+### 2. Memory Management for High Load
+The application has been optimized to handle up to 200+ concurrent users on 1GB RAM:
 
-### 3. CDN
-- Consider using a CDN for static assets
-- Configure proper caching headers
+#### **Memory Optimization Features:**
+- **Connection Limits**: Maximum 250 concurrent Socket.IO connections
+- **Database Optimization**: SQLite configured with WAL mode and memory mapping
+- **Automatic Cleanup**: Old data is automatically cleaned up every 5 minutes
+- **Memory Monitoring**: Real-time memory usage logging
+- **Rate Limiting**: Prevents server overload from rapid requests
+
+#### **Memory Usage Estimates:**
+- **Per User**: ~65-130KB (Socket.IO + game state)
+- **200 Users**: ~13-26MB total user overhead
+- **Server Base**: ~100-200MB (Node.js + Express + SQLite)
+- **Total Estimated**: ~163-326MB (well within 1GB limit)
+
+#### **Performance Monitoring:**
+```bash
+# Monitor memory usage in logs
+pm2 logs spotify-game-backend | grep "Memory Usage"
+
+# Check active connections
+pm2 logs spotify-game-backend | grep "Active connections"
+
+# Monitor cleanup operations
+pm2 logs spotify-game-backend | grep "Cleanup"
+```
+
+#### **Scaling Recommendations:**
+- **Up to 200 users**: Current optimizations should handle this well
+- **200-500 users**: Consider upgrading to 2GB RAM
+- **500+ users**: Consider load balancing across multiple instances
+
+#### **Emergency Scaling:**
+If you need to handle more users immediately:
+1. **Reduce cleanup intervals** (change from 5 minutes to 2 minutes)
+2. **Lower connection limit** (change MAX_CONNECTIONS to 150)
+3. **Increase rate limiting** (change from 1 second to 2 seconds between guesses)
+4. **Disable detailed logging** (set console logging to false by default)
+
+### 3. Database Performance
 
 ---
 

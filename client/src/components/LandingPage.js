@@ -37,20 +37,23 @@ const LandingPage = () => {
   const [gameCodeVerified, setGameCodeVerified] = useState(false);
   const [gameCodeError, setGameCodeError] = useState('');
 
-  // Handle player name input with character limit
+  // Handle player name input with character limit and validation
   const handlePlayerNameChange = (e) => {
     const value = e.target.value;
-    // Limit input to 32 characters
-    if (value.length <= 32) {
-      setPlayerName(value);
-    }
+    // Limit input to 32 characters and remove invalid characters
+    const sanitized = value
+      .replace(/[<>'"`;{}[\]()&|$\\]/g, '') // Remove dangerous characters
+      .replace(/script|javascript|vbscript|onload|onerror|onclick/gi, '') // Remove script keywords
+      .substring(0, 32); // Limit length
+    
+    setPlayerName(sanitized);
   };
 
   // Handle game code input
   const handleGameCodeChange = (e) => {
     const value = e.target.value;
-    // Limit to 8 digits
-    if (value.length <= 8 && /^\d*$/.test(value)) {
+    // Limit to 6 digits only
+    if (value.length <= 6 && /^\d*$/.test(value)) {
       setGameCode(value);
       setGameCodeError(''); // Clear error when user types
     }

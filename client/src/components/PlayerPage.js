@@ -293,16 +293,17 @@ const PlayerPage = () => {
   };
 
   const handleInputChange = (field, value) => {
-    // Limit input to 100 characters
-    if (value.length > 100) {
-      return; // Don't update if exceeding limit
-    }
+    // Sanitize input to prevent XSS and injection attacks (less restrictive for user experience)
+    const sanitized = value
+      .replace(/[<>`{}|$\\]/g, '') // Remove only truly dangerous characters, allow apostrophes, quotes, parentheses
+      .replace(/script|javascript|vbscript|onload|onerror|onclick/gi, '') // Remove script keywords
+      .substring(0, 100); // Limit length
     
-    setGuess(prev => ({ ...prev, [field]: value }));
+    setGuess(prev => ({ ...prev, [field]: sanitized }));
     
     // Count letters for lyrics input
     if (field === 'lyrics') {
-      const letterCount = value.replace(/[^\w]/g, '').length;
+      const letterCount = sanitized.replace(/[^\w]/g, '').length;
       setLyricsLetterCount(letterCount);
     }
   };
@@ -427,7 +428,7 @@ const PlayerPage = () => {
           
           <p className="text-center" style={{ fontSize: '0.9rem', color: '#666' }}>
             {canGuess 
-              ? "Guess the artist, song title, or lyrics! Special characters are ignored in all guesses. Lyrics must be at least 12 letters. Each correct guess earns 1 point."
+              ? "Guess the artist, song title, or lyrics! You can use apostrophes, quotes, and other common characters. Lyrics must be at least 12 letters. Each correct guess earns 1 point."
               : "All parts of this song have been guessed! Wait for the next song to start guessing again."
             }
           </p>

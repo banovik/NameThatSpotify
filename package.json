@@ -4,12 +4,13 @@
   "description": "A multiplayer Spotify music guessing game",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
+    "start": "node --max-old-space-size=512 --optimize-for-size server.js",
+    "dev": "nodemon --max-old-space-size=512 --optimize-for-size server.js",
     "client": "cd client && npm start",
     "build": "cd client && npm run build",
     "install-client": "cd client && npm install",
-    "heroku-postbuild": "npm run install-client && npm run build"
+    "heroku-postbuild": "npm run install-client && npm run build",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "axios": "^1.5.0",
