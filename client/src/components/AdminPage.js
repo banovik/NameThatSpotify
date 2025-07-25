@@ -3,10 +3,57 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import io from 'socket.io-client';
 import { useAuth } from '../contexts/AuthContext';
+import { useLogging } from '../contexts/LoggingContext';
 
 const AdminPage = () => {
   const navigate = useNavigate();
-  const { logoutAdmin } = useAuth();
+  const { logoutAdmin, isAdminAuthenticated } = useAuth();
+  const { consoleLoggingEnabled, setConsoleLoggingEnabled, log, logError, logWarn } = useLogging();
+  
+  // Ensure admin authentication is maintained
+  useEffect(() => {
+    if (!isAdminAuthenticated) {
+      log('AdminPage: Admin not authenticated, redirecting to landing page');
+      navigate('/');
+      return;
+    }
+    log('AdminPage: Admin authenticated, staying on admin page');
+  }, [isAdminAuthenticated, navigate, log]);
+
+  // Debug authentication state changes
+  useEffect(() => {
+    log('AdminPage: Authentication state changed - isAdminAuthenticated:', isAdminAuthenticated);
+  }, [isAdminAuthenticated, log]);
+
+  // Fetch game code status
+  const fetchGameCodeStatus = async () => {
+    try {
+      const response = await axios.get('/api/game-code-status');
+      setGameCode(response.data.gameCode);
+      setTimeRemaining(response.data.timeRemaining);
+      setAdminConnected(response.data.adminConnected);
+    } catch (error) {
+      logError('Error fetching game code status:', error);
+    }
+  };
+
+  // Update game code status periodically
+  useEffect(() => {
+    if (isAdminAuthenticated) {
+      fetchGameCodeStatus();
+      const interval = setInterval(fetchGameCodeStatus, 1000); // Update every second
+      return () => clearInterval(interval);
+    }
+  }, [isAdminAuthenticated]);
+
+  // Format time remaining
+  const formatTimeRemaining = (ms) => {
+    if (ms <= 0) return 'Expired';
+    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.floor((ms % 60000) / 1000);
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
   const [socket, setSocket] = useState(null);
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [playlist, setPlaylist] = useState(null);
@@ -45,18 +92,29 @@ const AdminPage = () => {
   // Add state for editing lyrics in Now Playing
   const [editingLyrics, setEditingLyrics] = useState(false);
   const [editedLyricsText, setEditedLyricsText] = useState('');
+  // Game code state
+  const [gameCode, setGameCode] = useState(null);
+  const [timeRemaining, setTimeRemaining] = useState(0);
+  const [adminConnected, setAdminConnected] = useState(false);
 
   useEffect(() => {
+    // Only proceed if admin is authenticated
+    if (!isAdminAuthenticated) {
+      return;
+    }
+
     // Check if user is authenticated
     const checkAuthStatus = async () => {
       try {
         // Check if we have a valid Spotify token
         const response = await axios.get('/api/devices');
         // If this succeeds, we have a valid token
-        console.log('Spotify authentication verified');
+        log('Spotify authentication verified');
+        setError(''); // Clear any previous Spotify auth errors
       } catch (error) {
-        console.error('Spotify auth check failed:', error);
+        logError('Spotify auth check failed:', error);
         // Don't redirect, just show that Spotify needs to be authenticated
+        // This should NOT affect admin authentication state
         setError('Please authenticate with Spotify to use admin features');
       }
     };
@@ -65,7 +123,7 @@ const AdminPage = () => {
 
     // Initialize Socket.IO connection for admin
     const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://127.0.0.1:5001';
-    console.log('Admin: Attempting to connect to Socket.IO server at', backendUrl);
+    log('Admin: Attempting to connect to Socket.IO server at', backendUrl);
     const newSocket = io(backendUrl, {
       transports: ['websocket', 'polling'],
       timeout: 20000
@@ -74,19 +132,21 @@ const AdminPage = () => {
 
     // Socket event listeners for admin
     newSocket.on('connect', () => {
-      console.log('Admin connected to server with socket ID:', newSocket.id);
+      log('Admin connected to server with socket ID:', newSocket.id);
     });
 
     newSocket.on('connect_error', (error) => {
-      console.error('Admin socket connection error:', error);
+      logError('Admin socket connection error:', error);
+      // Don't redirect on socket connection errors
     });
 
     newSocket.on('disconnect', (reason) => {
-      console.log('Admin disconnected from server:', reason);
+      log('Admin disconnected from server:', reason);
+      // Don't redirect on socket disconnection
     });
 
     newSocket.on('gameState', (gameState) => {
-      console.log('Admin received game state:', gameState);
+      log('Admin received game state:', gameState);
       setPlayers(gameState.players || {});
       setScores(gameState.scores || {});
       setIsPlaying(gameState.isPlaying);
@@ -94,19 +154,19 @@ const AdminPage = () => {
     });
 
     newSocket.on('playerJoined', (data) => {
-      console.log('Admin: Player joined:', data);
+      log('Admin: Player joined:', data);
       setPlayers(data.players || {});
       setScores(data.scores || {});
     });
 
     newSocket.on('playerLeft', (data) => {
-      console.log('Admin: Player left:', data);
+      log('Admin: Player left:', data);
       setPlayers(data.players || {});
       setScores(data.scores || {});
     });
 
     newSocket.on('correctGuess', (data) => {
-      console.log('Admin: Correct guess:', data);
+      log('Admin: Correct guess:', data);
       setScores(data.scores || {});
       setGuessedParts(data.guessedParts || { artist: false, title: false, lyrics: false });
       // Update track status when guesses happen
@@ -114,17 +174,17 @@ const AdminPage = () => {
       
       // Log bonus point if awarded
       if (data.bonusAwarded) {
-        console.log(`🏆 Bonus point awarded to ${data.playerName} for completing all parts first!`);
+        log(`🏆 Bonus point awarded to ${data.playerName} for completing all parts first!`);
       }
     });
 
     newSocket.on('scoresReset', () => {
-      console.log('Admin: Scores reset');
+      log('Admin: Scores reset');
       setScores({});
     });
 
     newSocket.on('playlistReset', () => {
-      console.log('Admin: Playlist reset');
+      log('Admin: Playlist reset');
       setTrackStatus({});
       setCurrentTrack(null);
       setIsPlaying(false);
@@ -133,12 +193,12 @@ const AdminPage = () => {
     });
 
     newSocket.on('guessesUpdated', (data) => {
-      console.log('Admin: Guesses updated:', data.currentGuesses);
+      log('Admin: Guesses updated:', data.currentGuesses);
       setCurrentGuesses(data.currentGuesses);
     });
 
     newSocket.on('scrapingProgress', (data) => {
-      console.log('Admin: Scraping progress:', data);
+      log('Admin: Scraping progress:', data);
       setScrapingProgress(data);
       // After scraping is completed or stopped, recheck lyrics availability
       if (!data.isScraping) {
@@ -147,8 +207,8 @@ const AdminPage = () => {
     });
 
     newSocket.on('newSong', (song) => {
-      console.log('Admin: New song received:', song);
-      console.log('Admin: Lyrics debug:', {
+      log('Admin: New song received:', song);
+      log('Admin: Lyrics debug:', {
         hasLyrics: !!song.lyrics,
         lyricsLength: song.lyrics ? song.lyrics.length : 0,
         lyricsPreview: song.lyrics ? song.lyrics.substring(0, 100) : 'No lyrics',
@@ -174,9 +234,9 @@ const AdminPage = () => {
       setCurrentGuesses(song.currentGuesses || { artist: [], title: [], lyrics: [] });
       
       if (isCompleted) {
-        console.log('Admin: Song is already completed, guessing disabled');
+        log('Admin: Song is already completed, guessing disabled');
       } else if (hasProgress) {
-        console.log('Admin: Song has partial progress, some guessing disabled');
+        log('Admin: Song has partial progress, some guessing disabled');
       }
     });
 
@@ -220,7 +280,7 @@ const AdminPage = () => {
       setDevices(response.data.devices);
       setShowDevices(true);
     } catch (error) {
-      console.error('Error checking devices:', error);
+      logError('Error checking devices:', error);
       setError('Failed to check Spotify devices');
     }
   };
@@ -228,14 +288,14 @@ const AdminPage = () => {
   const testLyricsFetching = async () => {
     try {
       const response = await axios.get('/api/debug/test-lyrics');
-      console.log('Lyrics test:', response.data);
+      log('Lyrics test:', response.data);
       if (response.data.success) {
         alert(`Lyrics Test: SUCCESS!\n\nSong: ${response.data.testSong} by ${response.data.testArtist}\nLyrics length: ${response.data.lyricsLength}\n\nPreview:\n${response.data.lyricsPreview}`);
       } else {
         alert(`Lyrics Test: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
       }
     } catch (error) {
-      console.error('Error testing lyrics:', error);
+      logError('Error testing lyrics:', error);
       alert('Failed to test lyrics fetching');
     }
   };
@@ -243,14 +303,14 @@ const AdminPage = () => {
   const testLyricsAPI = async () => {
     try {
       const response = await axios.get('/api/debug/lyrics-test');
-      console.log('Lyrics API test:', response.data);
+      log('Lyrics API test:', response.data);
       if (response.data.success) {
         alert(`Lyrics API Test: SUCCESS!\n\nSong: ${response.data.testSong} by ${response.data.testArtist}\nLyrics length: ${response.data.lyricsLength}\n\nPreview:\n${response.data.lyricsPreview}`);
       } else {
         alert(`Lyrics API Test: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
       }
     } catch (error) {
-      console.error('Error testing lyrics API:', error);
+      logError('Error testing lyrics API:', error);
       alert('Failed to test lyrics API');
     }
   };
@@ -258,7 +318,7 @@ const AdminPage = () => {
   const runLyricsDiagnostics = async () => {
     try {
       const response = await axios.get('/api/debug/lyrics-diagnostics');
-      console.log('Lyrics diagnostics:', response.data);
+      log('Lyrics diagnostics:', response.data);
       if (response.data.success) {
         const diag = response.data.diagnostics;
         let message = `Lyrics Diagnostics:\n\n`;
@@ -281,7 +341,7 @@ const AdminPage = () => {
         alert(`Lyrics Diagnostics: FAILED!\n\nError: ${response.data.error}\nMessage: ${response.data.message}`);
       }
     } catch (error) {
-      console.error('Error running lyrics diagnostics:', error);
+      logError('Error running lyrics diagnostics:', error);
       alert('Failed to run lyrics diagnostics');
     }
   };
@@ -291,7 +351,7 @@ const AdminPage = () => {
       const response = await axios.get('/auth/spotify');
       window.location.href = response.data.url;
     } catch (error) {
-      console.error('Error initiating Spotify auth:', error);
+      logError('Error initiating Spotify auth:', error);
       setError('Failed to connect to Spotify');
     }
   };
@@ -311,8 +371,18 @@ const AdminPage = () => {
       // Check lyrics availability after playlist loads
       await checkLyricsAvailability();
     } catch (error) {
-      setError('Failed to load playlist. Please check the URL and try again. Please ensure that the playlist is public and that it is not created by Spotify or a bot.');
-      console.error('Playlist error:', error);
+      logError('Playlist error:', error);
+      
+      // Handle different types of errors
+      if (error.response?.status === 401) {
+        setError('Spotify authentication required. Please click "Connect Spotify Account" first, then try loading the playlist again.');
+      } else if (error.response?.status === 400) {
+        setError('Invalid playlist URL. Please check the URL and ensure it\'s a public Spotify playlist.');
+      } else if (error.response?.status === 500) {
+        setError('Server error while loading playlist. Please try again.');
+      } else {
+        setError('Failed to load playlist. Please check the URL and try again. Please ensure that the playlist is public and that it is not created by Spotify or a bot.');
+      }
     } finally {
       setLoading(false);
     }
@@ -320,13 +390,13 @@ const AdminPage = () => {
 
   const playTrack = async (track) => {
     try {
-      console.log('Admin: Playing track:', track);
+      log('Admin: Playing track:', track);
       const response = await axios.post('/api/play', { trackUri: track.uri });
-      console.log('Admin: Play response:', response.data);
+      log('Admin: Play response:', response.data);
       
       if (response.data.song) {
-        console.log('Admin: Song data received:', response.data.song);
-        console.log('Admin: Lyrics in response:', {
+        log('Admin: Song data received:', response.data.song);
+        log('Admin: Lyrics in response:', {
           hasLyrics: !!response.data.song.lyrics,
           lyricsLength: response.data.song.lyrics ? response.data.song.lyrics.length : 0,
           lyricsPreview: response.data.song.lyrics ? response.data.song.lyrics.substring(0, 100) : 'No lyrics'
@@ -342,7 +412,7 @@ const AdminPage = () => {
       await getTrackStatus();
     } catch (error) {
       setError('Failed to play track. Make sure Spotify is open and playing.');
-      console.error('Play error:', error);
+      logError('Play error:', error);
     }
   };
 
@@ -353,7 +423,7 @@ const AdminPage = () => {
       setError('');
     } catch (error) {
       setError('Failed to pause playback.');
-      console.error('Pause error:', error);
+      logError('Pause error:', error);
     }
   };
 
@@ -364,7 +434,7 @@ const AdminPage = () => {
       setError('');
     } catch (error) {
       setError('Failed to resume playback.');
-      console.error('Resume error:', error);
+      logError('Resume error:', error);
     }
   };
 
@@ -390,7 +460,7 @@ const AdminPage = () => {
       setError('');
     } catch (error) {
       setError('Failed to reset scores.');
-      console.error('Reset error:', error);
+      logError('Reset error:', error);
     }
   };
 
@@ -425,7 +495,7 @@ const AdminPage = () => {
         setIsPlaybackActive(response.data.isPlaying);
       }
     } catch (error) {
-      console.error('Error getting playback position:', error);
+      logError('Error getting playback position:', error);
     }
   };
 
@@ -435,7 +505,7 @@ const AdminPage = () => {
       await axios.post('/api/seek', { positionMs });
       setPlaybackPosition(positionMs);
     } catch (error) {
-      console.error('Error seeking to position:', error);
+      logError('Error seeking to position:', error);
       setError('Failed to seek to position');
     }
   };
@@ -484,7 +554,7 @@ const AdminPage = () => {
         setTrackStatus(response.data.trackStatus);
       }
     } catch (error) {
-      console.error('Error getting track status:', error);
+      logError('Error getting track status:', error);
     }
   };
 
@@ -506,7 +576,7 @@ const AdminPage = () => {
       setLyricsAvailability({}); // Reset lyrics availability on playlist reset
     } catch (error) {
       setError('Failed to reset playlist.');
-      console.error('Reset playlist error:', error);
+      logError('Reset playlist error:', error);
     }
   };
 
@@ -564,11 +634,11 @@ const AdminPage = () => {
   const startLyricsScraping = async () => {
     try {
       const response = await axios.post('/api/scrape-lyrics');
-      console.log('Started lyrics scraping:', response.data);
+      log('Started lyrics scraping:', response.data);
       setError('');
     } catch (error) {
       setError('Failed to start lyrics scraping: ' + (error.response?.data?.error || error.message));
-      console.error('Lyrics scraping error:', error);
+      logError('Lyrics scraping error:', error);
     }
   };
 
@@ -576,11 +646,11 @@ const AdminPage = () => {
   const stopLyricsScraping = async () => {
     try {
       const response = await axios.post('/api/stop-scraping');
-      console.log('Stopped lyrics scraping:', response.data);
+      log('Stopped lyrics scraping:', response.data);
       setError('');
     } catch (error) {
       setError('Failed to stop lyrics scraping: ' + (error.response?.data?.error || error.message));
-      console.error('Stop scraping error:', error);
+      logError('Stop scraping error:', error);
     }
   };
 
@@ -589,9 +659,9 @@ const AdminPage = () => {
     try {
       const response = await axios.post('/api/lyrics-availability', { songs: tracks.map(item => ({ id: item.track.id, artist: item.track.artists[0].name, title: item.track.name })) });
       setLyricsAvailability(response.data.availability);
-      console.log('Lyrics availability checked:', response.data.availability);
+      log('Lyrics availability checked:', response.data.availability);
     } catch (error) {
-      console.error('Error checking lyrics availability:', error);
+      logError('Error checking lyrics availability:', error);
       setError('Failed to check lyrics availability for playlist tracks.');
     }
   };
@@ -608,13 +678,13 @@ const AdminPage = () => {
         title: tracks.find(item => item.track.id === manualLyricsTrackId)?.track.name,
         lyrics: manualLyricsText
       });
-      console.log('Manual lyrics saved:', { id: manualLyricsTrackId, lyrics: manualLyricsText });
+      log('Manual lyrics saved:', { id: manualLyricsTrackId, lyrics: manualLyricsText });
       setLyricsAvailability(prev => ({ ...prev, [manualLyricsTrackId]: true }));
       setManualLyricsTrackId(null);
       setManualLyricsText('');
       alert('Lyrics saved successfully!');
     } catch (error) {
-      console.error('Error saving manual lyrics:', error);
+      logError('Error saving manual lyrics:', error);
       alert('Failed to save lyrics. Please try again.');
     }
   };
@@ -623,13 +693,13 @@ const AdminPage = () => {
   const handleManualAward = async (playerName, guessType, guessText) => {
     try {
       await axios.post('/api/manual-award', { playerName, guessType, guessText });
-      console.log(`Point awarded manually to ${playerName} for ${guessType} guess: "${guessText}"`);
+      log(`Point awarded manually to ${playerName} for ${guessType} guess: "${guessText}"`);
       // Refresh scores and guesses after manual award
       await getTrackStatus();
       setGuessedParts(prev => ({ ...prev, [guessType]: true })); // Mark as guessed
       alert(`Manual award awarded to ${playerName} for ${guessType} guess: "${guessText}"`);
     } catch (error) {
-      console.error('Error awarding manual guess:', error);
+      logError('Error awarding manual guess:', error);
       alert('Failed to award manual guess. Please try again.');
     }
   };
@@ -646,32 +716,52 @@ const AdminPage = () => {
       setNewScore('');
       alert('Score updated successfully!');
     } catch (error) {
-      console.error('Error saving score:', error);
+      logError('Error saving score:', error);
       alert('Failed to update score. Please try again.');
     }
   };
 
   // Add handler for saving edited lyrics for current track
   const handleSaveEditedLyrics = async () => {
-    if (!editedLyricsText.trim()) {
-      alert('Lyrics text cannot be empty.');
-      return;
-    }
+    if (!currentTrack || !editedLyricsText.trim()) return;
+    
     try {
-      await axios.post('/api/manual-lyrics', {
-        id: currentTrack.id,
-        artist: formatArtists(currentTrack.artists),
-        title: currentTrack.name,
-        lyrics: editedLyricsText
+      await axios.post('/api/save-edited-lyrics', {
+        trackId: currentTrack.id,
+        lyrics: editedLyricsText.trim()
       });
+      
       setEditingLyrics(false);
       setEditedLyricsText('');
-      // Optionally update currentTrack.lyrics in state
-      setCurrentTrack(prev => prev ? { ...prev, lyrics: editedLyricsText } : prev);
-      alert('Lyrics updated successfully!');
+      setError('');
+      log('Lyrics edited successfully');
     } catch (error) {
-      console.error('Error saving edited lyrics:', error);
-      alert('Failed to update lyrics. Please try again.');
+      logError('Error saving edited lyrics:', error);
+      setError('Failed to save edited lyrics');
+    }
+  };
+
+  // Kick player functionality
+  const kickPlayer = async (socketId, playerName) => {
+    if (!window.confirm(`Are you sure you want to kick "${playerName}"? They will be blocked from rejoining for 10 minutes.`)) {
+      return;
+    }
+    
+    try {
+      const response = await axios.post('/api/kick-player', {
+        socketId: socketId,
+        reason: 'Admin kick'
+      });
+      
+      if (response.data.success) {
+        log(`Successfully kicked player "${playerName}"`);
+        setError('');
+      } else {
+        setError('Failed to kick player');
+      }
+    } catch (error) {
+      logError('Error kicking player:', error);
+      setError('Failed to kick player');
     }
   };
 
@@ -679,9 +769,40 @@ const AdminPage = () => {
     <div className="container">
       <div className="admin-header">
         <h1 className="title">Admin Panel</h1>
-        <button className="btn btn-danger" onClick={handleLogout}>
-          Logout
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {/* Game Code Display */}
+          {gameCode && (
+            <div style={{ 
+              background: '#1db954', 
+              color: 'white', 
+              padding: '8px 12px', 
+              borderRadius: '6px',
+              fontSize: '14px',
+              fontWeight: 'bold',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              minWidth: '120px'
+            }}>
+              <div>Game Code: {gameCode}</div>
+              <div style={{ fontSize: '12px', opacity: 0.9 }}>
+                Time: {formatTimeRemaining(timeRemaining)}
+              </div>
+            </div>
+          )}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '14px', color: '#fff' }}>
+            <input
+              type="checkbox"
+              checked={consoleLoggingEnabled}
+              onChange={(e) => setConsoleLoggingEnabled(e.target.checked)}
+              style={{ margin: 0 }}
+            />
+            Console Logging
+          </label>
+          <button className="btn btn-danger" onClick={handleLogout}>
+            Logout
+          </button>
+        </div>
       </div>
       
       {error && (
@@ -1012,6 +1133,13 @@ const AdminPage = () => {
               <div key={socketId} className="player-item">
                 <span>{playerName}</span>
                 <span className="score">{scores[playerName] || 0} points</span>
+                <button 
+                  className="btn btn-danger btn-sm" 
+                  onClick={() => kickPlayer(socketId, playerName)}
+                  title={`Kick ${playerName} (blocks IP for 10 minutes)`}
+                >
+                  Kick
+                </button>
               </div>
             ))}
           </div>

@@ -65,6 +65,12 @@ body {
   background: linear-gradient(45deg, #dc3545, #c82333);
 }
 
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
+  border-radius: 15px;
+}
+
 .input {
   width: 100%;
   padding: 12px 16px;

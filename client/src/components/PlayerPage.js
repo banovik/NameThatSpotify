@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
+import { useLogging } from '../contexts/LoggingContext';
 
 const PlayerPage = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { log, logError } = useLogging();
   const [socket, setSocket] = useState(null);
   const [playerName, setPlayerName] = useState('');
   const [currentSong, setCurrentSong] = useState(null);
@@ -36,7 +38,7 @@ const PlayerPage = () => {
 
     // Initialize Socket.IO connection
     const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://127.0.0.1:5001';
-    console.log('Attempting to connect to Socket.IO server at', backendUrl);
+    log('Attempting to connect to Socket.IO server at', backendUrl);
     const newSocket = io(backendUrl, {
       transports: ['websocket', 'polling'],
       timeout: 20000
@@ -45,20 +47,42 @@ const PlayerPage = () => {
 
     // Socket event listeners
     newSocket.on('connect', () => {
-      console.log('Connected to server with socket ID:', newSocket.id);
-      newSocket.emit('playerJoin', location.state.playerName);
+      log('Connected to server with socket ID:', newSocket.id);
+      // Join with game code
+      newSocket.emit('playerJoin', { 
+        playerName: location.state.playerName,
+        gameCode: location.state.gameCode 
+      });
     });
 
     newSocket.on('connect_error', (error) => {
-      console.error('Socket connection error:', error);
+      logError('Socket connection error:', error);
     });
 
     newSocket.on('disconnect', (reason) => {
-      console.log('Disconnected from server:', reason);
+      log('Disconnected from server:', reason);
+    });
+
+    newSocket.on('gameCodeInvalid', (data) => {
+      logError('Game code invalid:', data.error);
+      setMessage(data.error, 'error');
+      // Redirect back to landing page after a short delay
+      setTimeout(() => {
+        navigate('/');
+      }, 3000);
+    });
+
+    newSocket.on('gameEnded', (data) => {
+      log('Game ended:', data.message);
+      setMessage(data.message, 'error');
+      // Redirect back to landing page after a short delay
+      setTimeout(() => {
+        navigate('/');
+      }, 5000);
     });
 
     newSocket.on('gameState', (gameState) => {
-      console.log('Received game state:', gameState);
+      log('Received game state:', gameState);
       setCurrentSong(gameState.currentSong);
       setPlayers(gameState.players || {});
       setScores(gameState.scores || {});
@@ -67,10 +91,14 @@ const PlayerPage = () => {
     });
 
     newSocket.on('newSong', (song) => {
-      console.log('Received new song:', song);
+      log('Received new song:', song);
       setCurrentSong(song);
       setIsPlaying(true);
       setLyricsAvailable(song.lyricsAvailable !== false);
+      
+      // Clear input fields for new song
+      setGuess({ artist: '', title: '', lyrics: '' });
+      setLyricsLetterCount(0);
       
       // Check if this song has any previous progress
       const hasProgress = song.guessedParts && (
@@ -126,6 +154,18 @@ const PlayerPage = () => {
       setScores(data.scores || {});
       setGuessedParts(data.guessedParts || { artist: false, title: false, lyrics: false });
       
+      // Clear input fields for parts that were just guessed correctly
+      const newGuess = { ...guess };
+      data.correctParts.forEach(part => {
+        newGuess[part] = '';
+      });
+      setGuess(newGuess);
+      
+      // Reset lyrics letter count if lyrics were guessed
+      if (data.correctParts.includes('lyrics')) {
+        setLyricsLetterCount(0);
+      }
+      
       // Check if all parts have been guessed
       if (data.allPartsGuessed) {
         setCanGuess(false);
@@ -166,6 +206,28 @@ const PlayerPage = () => {
     newSocket.on('scoresReset', () => {
       setScores({});
       setMessage('Scores have been reset!', 'info');
+    });
+
+    newSocket.on('playerKicked', (data) => {
+      setPlayers(data.players || {});
+      setScores(data.scores || {});
+      if (data.playerName === playerName) {
+        setMessage(`You have been kicked from the game. Reason: ${data.reason}`, 'error');
+        // Redirect back to landing page after a short delay
+        setTimeout(() => {
+          navigate('/');
+        }, 5000);
+      } else {
+        setMessage(`${data.playerName} has been kicked from the game.`, 'info');
+      }
+    });
+
+    newSocket.on('accessDenied', (data) => {
+      setMessage(data.error, 'error');
+      // Redirect back to landing page after a short delay
+      setTimeout(() => {
+        navigate('/');
+      }, 5000);
     });
 
     return () => {
@@ -231,6 +293,11 @@ const PlayerPage = () => {
   };
 
   const handleInputChange = (field, value) => {
+    // Limit input to 100 characters
+    if (value.length > 100) {
+      return; // Don't update if exceeding limit
+    }
+    
     setGuess(prev => ({ ...prev, [field]: value }));
     
     // Count letters for lyrics input
@@ -294,7 +361,15 @@ const PlayerPage = () => {
                   placeholder={guessedParts.title ? "Title already guessed ✓" : "Song title"}
                   value={guess.title}
                   onChange={(e) => handleInputChange('title', e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (guess.artist || guess.title || guess.lyrics)) {
+                      e.preventDefault();
+                      handleGuessSubmit(e);
+                    }
+                  }}
+                  enterKeyHint="done"
                   disabled={guessedParts.title}
+                  maxLength={100}
                 />
                 <input
                   ref={artistInputRef}
@@ -303,7 +378,15 @@ const PlayerPage = () => {
                   placeholder={guessedParts.artist ? "Artist already guessed ✓" : "Artist name"}
                   value={guess.artist}
                   onChange={(e) => handleInputChange('artist', e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (guess.artist || guess.title || guess.lyrics)) {
+                      e.preventDefault();
+                      handleGuessSubmit(e);
+                    }
+                  }}
+                  enterKeyHint="done"
                   disabled={guessedParts.artist}
+                  maxLength={100}
                 />
                 <div className="lyrics-input-container">
                   <input
@@ -313,7 +396,15 @@ const PlayerPage = () => {
                     placeholder={guessedParts.lyrics ? "Lyrics already guessed ✓" : !lyricsAvailable ? "Lyrics not available ✗" : "Lyrics (min 12 letters)"}
                     value={guess.lyrics}
                     onChange={(e) => handleInputChange('lyrics', e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (guess.artist || guess.title || guess.lyrics)) {
+                        e.preventDefault();
+                        handleGuessSubmit(e);
+                      }
+                    }}
+                    enterKeyHint="done"
                     disabled={guessedParts.lyrics || !lyricsAvailable}
+                    maxLength={100}
                   />
                   {guess.lyrics && !guessedParts.lyrics && lyricsAvailable && (
                     <div className="letter-count">

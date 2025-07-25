@@ -22,6 +22,12 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
+// IP tracking middleware
+app.use((req, res, next) => {
+  req.ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress || req.socket.remoteAddress;
+  next();
+});
+
 // Spotify API configuration
 const spotifyApi = new SpotifyWebApi({
   clientId: process.env.SPOTIFY_CLIENT_ID,
@@ -63,8 +69,233 @@ let gameState = {
     totalCount: 0,
     failedIndices: [],
     playlistTracks: []
-  }
+  },
+  // Game code system
+  gameCode: null,
+  gameCodeExpiry: null,
+  adminConnected: false,
+  // Brute force protection
+  bruteForceProtection: {
+    adminPassword: {
+      failedAttempts: 0,
+      lastFailedAttempt: 0,
+      blockedUntil: 0
+    },
+    gameCode: {
+      failedAttempts: 0,
+      lastFailedAttempt: 0,
+      blockedUntil: 0
+    }
+  },
+  // IP tracking and blocking
+  blockedIps: new Map(), // ip -> { blockedUntil: timestamp, reason: string }
+  socketToIp: new Map() // socketId -> ip
 };
+
+// Game code management functions
+function generateGameCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+function resetGameCode() {
+  gameState.gameCode = null;
+  gameState.gameCodeExpiry = null;
+  gameState.adminConnected = false;
+  // Clear all players and scores
+  gameState.players = {};
+  gameState.scores = {};
+  gameState.activeUsernames.clear();
+  gameState.currentSong = null;
+  gameState.isPlaying = false;
+  gameState.currentPlaylist = null;
+  gameState.guessedParts = { artist: false, title: false, lyrics: false };
+  gameState.trackStatus = {};
+  gameState.songStates = {};
+  gameState.bonusAwarded = false;
+  gameState.playersWhoGuessed.clear();
+  gameState.currentGuesses = { artist: [], title: [], lyrics: [] };
+  gameState.lastGuessTimestamps = {};
+  gameState.scrapingState = {
+    isScraping: false,
+    currentIndex: 0,
+    successfulCount: 0,
+    totalCount: 0,
+    failedIndices: [],
+    playlistTracks: []
+  };
+  // Reset brute force protection
+  gameState.bruteForceProtection = {
+    adminPassword: {
+      failedAttempts: 0,
+      lastFailedAttempt: 0,
+      blockedUntil: 0
+    },
+    gameCode: {
+      failedAttempts: 0,
+      lastFailedAttempt: 0,
+      blockedUntil: 0
+    }
+  };
+  // Clear IP tracking (but keep blocked IPs for security)
+  gameState.socketToIp.clear();
+  
+  // Notify all clients that game has ended
+  io.emit('gameEnded', { message: 'Game session has expired. Please wait for an admin to start a new game.' });
+  console.log('Game code expired - all players kicked out');
+}
+
+function extendGameCode() {
+  if (gameState.gameCode) {
+    gameState.gameCodeExpiry = Date.now() + (30 * 60 * 1000); // 30 minutes
+    console.log('Game code timer extended for 30 minutes');
+  }
+}
+
+function checkGameCodeExpiry() {
+  if (gameState.gameCode && gameState.gameCodeExpiry && Date.now() > gameState.gameCodeExpiry) {
+    resetGameCode();
+  }
+}
+
+// Brute force protection functions
+function checkBruteForceProtection(type) {
+  const protection = gameState.bruteForceProtection[type];
+  const now = Date.now();
+  
+  // Check if currently blocked
+  if (now < protection.blockedUntil) {
+    const remainingTime = Math.ceil((protection.blockedUntil - now) / 1000);
+    return {
+      blocked: true,
+      remainingTime: remainingTime,
+      message: `Too many failed attempts. Please wait ${remainingTime} seconds before trying again.`
+    };
+  }
+  
+  // Reset failed attempts if more than 1 minute has passed since last attempt
+  if (now - protection.lastFailedAttempt > 60000) {
+    protection.failedAttempts = 0;
+  }
+  
+  return { blocked: false };
+}
+
+function recordFailedAttempt(type) {
+  const protection = gameState.bruteForceProtection[type];
+  const now = Date.now();
+  
+  protection.failedAttempts++;
+  protection.lastFailedAttempt = now;
+  
+  // Block for 1 minute after 5 failed attempts
+  if (protection.failedAttempts >= 5) {
+    protection.blockedUntil = now + 60000; // 1 minute
+    console.log(`🚫 Brute force protection activated for ${type} - blocked until ${new Date(protection.blockedUntil).toLocaleTimeString()}`);
+  }
+  
+  console.log(`❌ Failed ${type} attempt #${protection.failedAttempts}`);
+}
+
+function resetFailedAttempts(type) {
+  const protection = gameState.bruteForceProtection[type];
+  protection.failedAttempts = 0;
+  protection.lastFailedAttempt = 0;
+  protection.blockedUntil = 0;
+  console.log(`✅ Reset brute force protection for ${type}`);
+}
+
+// IP blocking functions
+function blockIp(ip, reason = 'Admin kick', durationMinutes = 10) {
+  const blockedUntil = Date.now() + (durationMinutes * 60 * 1000);
+  gameState.blockedIps.set(ip, {
+    blockedUntil: blockedUntil,
+    reason: reason
+  });
+  console.log(`🚫 Blocked IP ${ip} until ${new Date(blockedUntil).toLocaleTimeString()} - Reason: ${reason}`);
+}
+
+function isIpBlocked(ip) {
+  const blockInfo = gameState.blockedIps.get(ip);
+  if (!blockInfo) return false;
+  
+  if (Date.now() > blockInfo.blockedUntil) {
+    // Block has expired, remove it
+    gameState.blockedIps.delete(ip);
+    console.log(`✅ IP ${ip} block has expired and been removed`);
+    return false;
+  }
+  
+  return true;
+}
+
+function getBlockedIpInfo(ip) {
+  const blockInfo = gameState.blockedIps.get(ip);
+  if (!blockInfo) return null;
+  
+  if (Date.now() > blockInfo.blockedUntil) {
+    gameState.blockedIps.delete(ip);
+    return null;
+  }
+  
+  return {
+    remainingTime: Math.ceil((blockInfo.blockedUntil - Date.now()) / 1000),
+    reason: blockInfo.reason
+  };
+}
+
+function kickPlayer(socketId, reason = 'Admin kick') {
+  const playerName = gameState.players[socketId];
+  const ip = gameState.socketToIp.get(socketId);
+  
+  if (playerName) {
+    // Remove player from game
+    delete gameState.players[socketId];
+    gameState.socketToIp.delete(socketId);
+    
+    // Check if this username is still used by other active players
+    const usernameStillActive = Object.values(gameState.players).includes(playerName);
+    if (!usernameStillActive) {
+      gameState.activeUsernames.delete(playerName);
+    }
+    
+    // Block the IP for 10 minutes
+    if (ip) {
+      blockIp(ip, reason, 10);
+    }
+    
+    // Notify all clients
+    io.emit('playerKicked', { 
+      playerName, 
+      players: gameState.players, 
+      scores: gameState.scores,
+      reason: reason
+    });
+    
+    // Disconnect the socket
+    io.sockets.sockets.get(socketId)?.disconnect();
+    
+    console.log(`👢 Kicked player "${playerName}" (IP: ${ip}) - Reason: ${reason}`);
+    return { success: true, playerName, ip };
+  }
+  
+  return { success: false, error: 'Player not found' };
+}
+
+function cleanupExpiredBlocks() {
+  const now = Date.now();
+  for (const [ip, blockInfo] of gameState.blockedIps.entries()) {
+    if (now > blockInfo.blockedUntil) {
+      gameState.blockedIps.delete(ip);
+      console.log(`🧹 Cleaned up expired block for IP ${ip}`);
+    }
+  }
+}
+
+// Check game code expiry every minute
+setInterval(checkGameCodeExpiry, 60000);
+
+// Clean up expired IP blocks every 5 minutes
+setInterval(cleanupExpiredBlocks, 300000);
 
 // Set up SQLite database for lyrics caching
 const dbPath = path.join(__dirname, 'lyrics.db');
@@ -176,6 +407,7 @@ function normalizeTitle(title) {
   return title
     .toLowerCase()
     .replace(/\([^)]*\)/g, '') // Remove anything in parentheses
+    .replace(/\s+-\s+.*$/g, '') // Remove anything after and including " - " (space-dash-space)
     .replace(/[^\w\s]/g, '') // Remove special characters
     .replace(/\s+/g, ' ') // Replace multiple spaces with single space
     .trim();
@@ -187,6 +419,8 @@ function normalizeArtist(artist) {
   
   return artist
     .toLowerCase()
+    .replace(/\([^)]*\)/g, '') // Remove anything in parentheses
+    .replace(/\s+-\s+.*$/g, '') // Remove anything after and including " - " (space-dash-space)
     .replace(/[^\w\s]/g, '') // Remove special characters
     .replace(/\s+/g, ' ') // Replace multiple spaces with single space
     .trim();
@@ -244,15 +478,138 @@ app.post('/api/verify-admin', (req, res) => {
   const { password } = req.body;
   const adminPassword = process.env.ADMIN_PASSWORD;
   
+  // Check brute force protection
+  const protection = checkBruteForceProtection('adminPassword');
+  if (protection.blocked) {
+    return res.status(429).json({ error: protection.message });
+  }
+  
   if (!adminPassword) {
     return res.status(500).json({ error: 'Admin password not configured' });
   }
   
   if (password === adminPassword) {
-    res.json({ success: true });
+    // Reset failed attempts on successful login
+    resetFailedAttempts('adminPassword');
+    
+    // Generate new game code when admin logs in
+    gameState.gameCode = generateGameCode();
+    gameState.gameCodeExpiry = Date.now() + (30 * 60 * 1000); // 30 minutes
+    gameState.adminConnected = true;
+    console.log(`Admin logged in - Game code generated: ${gameState.gameCode}`);
+    res.json({ success: true, gameCode: gameState.gameCode });
   } else {
+    // Record failed attempt
+    recordFailedAttempt('adminPassword');
     res.status(401).json({ error: 'Invalid admin password' });
   }
+});
+
+// Game code verification for players
+app.post('/api/verify-game-code', (req, res) => {
+  const { gameCode } = req.body;
+  
+  // Check if IP is blocked
+  if (isIpBlocked(req.ip)) {
+    const blockInfo = getBlockedIpInfo(req.ip);
+    return res.status(403).json({ 
+      error: `Access denied. You are blocked for ${blockInfo.remainingTime} more seconds. Reason: ${blockInfo.reason}` 
+    });
+  }
+  
+  // Check brute force protection
+  const protection = checkBruteForceProtection('gameCode');
+  if (protection.blocked) {
+    return res.status(429).json({ error: protection.message });
+  }
+  
+  if (!gameState.gameCode) {
+    return res.status(400).json({ error: 'No active game session' });
+  }
+  
+  if (gameState.gameCode !== gameCode) {
+    // Record failed attempt
+    recordFailedAttempt('gameCode');
+    return res.status(401).json({ error: 'Invalid game code' });
+  }
+  
+  // Check if game code has expired
+  if (gameState.gameCodeExpiry && Date.now() > gameState.gameCodeExpiry) {
+    resetGameCode();
+    return res.status(400).json({ error: 'Game session has expired' });
+  }
+  
+  // Reset failed attempts on successful verification
+  resetFailedAttempts('gameCode');
+  res.json({ success: true });
+});
+
+// Kick player endpoint
+app.post('/api/kick-player', (req, res) => {
+  const { socketId, reason } = req.body;
+  
+  if (!gameState.adminConnected) {
+    return res.status(401).json({ error: 'Admin not authenticated' });
+  }
+  
+  if (!socketId) {
+    return res.status(400).json({ error: 'Socket ID is required' });
+  }
+  
+  const result = kickPlayer(socketId, reason || 'Admin kick');
+  
+  if (result.success) {
+    res.json({ 
+      success: true, 
+      message: `Player "${result.playerName}" has been kicked and their IP blocked for 10 minutes`,
+      playerName: result.playerName,
+      ip: result.ip
+    });
+  } else {
+    res.status(404).json({ error: result.error });
+  }
+});
+
+// Get blocked IPs endpoint (for admin monitoring)
+app.get('/api/blocked-ips', (req, res) => {
+  if (!gameState.adminConnected) {
+    return res.status(401).json({ error: 'Admin not authenticated' });
+  }
+  
+  const blockedIps = [];
+  for (const [ip, blockInfo] of gameState.blockedIps.entries()) {
+    if (Date.now() <= blockInfo.blockedUntil) {
+      blockedIps.push({
+        ip: ip,
+        blockedUntil: blockInfo.blockedUntil,
+        remainingTime: Math.ceil((blockInfo.blockedUntil - Date.now()) / 1000),
+        reason: blockInfo.reason
+      });
+    }
+  }
+  
+  res.json({ blockedIps });
+});
+
+// Get current game code status (for admin page)
+app.get('/api/game-code-status', (req, res) => {
+  if (!gameState.gameCode) {
+    return res.json({ 
+      hasGameCode: false, 
+      gameCode: null, 
+      timeRemaining: 0,
+      adminConnected: false 
+    });
+  }
+  
+  const timeRemaining = Math.max(0, gameState.gameCodeExpiry - Date.now());
+  
+  res.json({ 
+    hasGameCode: true, 
+    gameCode: gameState.gameCode, 
+    timeRemaining: timeRemaining,
+    adminConnected: gameState.adminConnected 
+  });
 });
 
 // Spotify authentication
@@ -346,6 +703,9 @@ app.post('/api/play', async (req, res) => {
     // Try to play the track
     await spotifyApi.play({ uris: [trackUri] });
     gameState.isPlaying = true;
+    
+    // Extend game code timer when a new song is played
+    extendGameCode();
     
     // Get track details
     const trackId = trackUri.split(':')[2];
@@ -1027,6 +1387,23 @@ app.post('/api/manual-award', (req, res) => {
 io.on('connection', (socket) => {
   console.log('User connected with socket ID:', socket.id);
   
+  // Track IP address for this socket
+  const clientIp = socket.handshake.headers['x-forwarded-for'] || 
+                   socket.handshake.address || 
+                   socket.conn.remoteAddress;
+  gameState.socketToIp.set(socket.id, clientIp);
+  console.log(`Socket ${socket.id} connected from IP: ${clientIp}`);
+  
+  // Check if IP is blocked
+  if (isIpBlocked(clientIp)) {
+    const blockInfo = getBlockedIpInfo(clientIp);
+    socket.emit('accessDenied', { 
+      error: `Access denied. You are blocked for ${blockInfo.remainingTime} more seconds. Reason: ${blockInfo.reason}` 
+    });
+    socket.disconnect();
+    return;
+  }
+  
   // Send current game state to new player
   socket.emit('gameState', {
     currentSong: gameState.currentSong,
@@ -1036,23 +1413,80 @@ io.on('connection', (socket) => {
     guessedParts: gameState.guessedParts
   });
   
+  // Game code verification for players
+  socket.on('verifyGameCode', (gameCode) => {
+    if (!gameState.gameCode) {
+      socket.emit('gameCodeInvalid', { error: 'No active game session' });
+      return;
+    }
+    
+    if (gameState.gameCode !== gameCode) {
+      socket.emit('gameCodeInvalid', { error: 'Invalid game code' });
+      return;
+    }
+    
+    // Check if game code has expired
+    if (gameState.gameCodeExpiry && Date.now() > gameState.gameCodeExpiry) {
+      resetGameCode();
+      socket.emit('gameCodeInvalid', { error: 'Game session has expired' });
+      return;
+    }
+    
+    socket.emit('gameCodeValid');
+  });
+  
   // Player joins
-  socket.on('playerJoin', (playerName) => {
+  socket.on('playerJoin', (data) => {
+    const { playerName, gameCode } = data;
     console.log(`Player attempting to join: ${playerName} (socket: ${socket.id})`);
     
+    // Verify game code first
+    if (!gameState.gameCode) {
+      socket.emit('gameCodeInvalid', { error: 'No active game session' });
+      return;
+    }
+    
+    if (gameState.gameCode !== gameCode) {
+      socket.emit('gameCodeInvalid', { error: 'Invalid game code' });
+      return;
+    }
+    
+    // Check if game code has expired
+    if (gameState.gameCodeExpiry && Date.now() > gameState.gameCodeExpiry) {
+      resetGameCode();
+      socket.emit('gameCodeInvalid', { error: 'Game session has expired' });
+      return;
+    }
+    
     // Check if username is already taken by another active player
-    if (gameState.activeUsernames.has(playerName)) {
-      // Check if this is a reconnection (same username, different socket)
-      const existingSocketId = Object.keys(gameState.players).find(socketId => 
-        gameState.players[socketId] === playerName
-      );
-      
-      if (existingSocketId && existingSocketId !== socket.id) {
-        // Username is taken by another active player
-        socket.emit('usernameTaken', { error: 'Username is already taken by another player' });
-        console.log(`Username "${playerName}" rejected - already taken by another player`);
-        return;
+    const existingSocketId = Object.keys(gameState.players).find(socketId => 
+      gameState.players[socketId] === playerName
+    );
+    
+    if (existingSocketId) {
+      if (existingSocketId !== socket.id) {
+        // Username is taken by another active player (different socket)
+        // Check if this might be a reconnection by looking at the score
+        // If the player has a score, they might be reconnecting
+        if (gameState.scores[playerName] !== undefined) {
+          // This could be a reconnection - allow it but remove the old connection
+          console.log(`Player "${playerName}" reconnecting - removing old connection (socket: ${existingSocketId})`);
+          delete gameState.players[existingSocketId];
+          // Clean up last guess timestamp for the old connection
+          delete gameState.lastGuessTimestamps[playerName];
+        } else {
+          // This is a new player trying to use a taken name
+          socket.emit('usernameTaken', { error: 'Sorry, that player name is taken. Please select another name.' });
+          console.log(`Username "${playerName}" rejected - already taken by another player (socket: ${existingSocketId})`);
+          return;
+        }
+      } else {
+        // This is a reconnection (same socket ID)
+        console.log(`Player "${playerName}" reconnecting (same socket: ${socket.id})`);
       }
+    } else {
+      // New player joining
+      console.log(`New player "${playerName}" joining`);
     }
     
     // Username is available or this is a reconnection
@@ -1124,7 +1558,64 @@ io.on('connection', (socket) => {
       // Check against all artists in the song
       const correctArtist = gameState.currentSong.artists.find(a => {
         const normalizedArtist = normalizeArtist(a);
-        return normalizedArtist.includes(normalizedGuess) || normalizedGuess.includes(normalizedArtist);
+        
+        // Split into words for better comparison
+        const actualWords = normalizedArtist.split(/\s+/).filter(word => word.length > 0);
+        const guessWords = normalizedGuess.split(/\s+/).filter(word => word.length > 0);
+        
+        // Check if the guess is a good match
+        let isCorrect = false;
+        
+        if (actualWords.length > 0 && guessWords.length > 0) {
+          // Calculate how many words from the guess match words in the actual artist
+          const matchingWords = guessWords.filter(guessWord => 
+            actualWords.some(actualWord => actualWord === guessWord)
+          );
+          
+          // Calculate match percentage
+          const matchPercentage = matchingWords.length / Math.max(actualWords.length, guessWords.length);
+          
+          // Require at least 80% match and at least 2 matching words (or all words if artist is short)
+          const minWordsRequired = Math.min(2, actualWords.length);
+          isCorrect = matchPercentage >= 0.8 && matchingWords.length >= minWordsRequired;
+          
+          // Also allow exact matches (case-insensitive, ignoring spaces and special chars)
+          if (!isCorrect) {
+            const exactMatch = normalizedArtist === normalizedGuess;
+            isCorrect = exactMatch;
+          }
+          
+          // Allow partial matches only if the guess contains ALL of the artist words
+          if (!isCorrect && guessWords.length >= actualWords.length * 0.7) {
+            const allActualWordsFound = actualWords.every(actualWord =>
+              guessWords.some(guessWord => guessWord === actualWord)
+            );
+            isCorrect = allActualWordsFound;
+          }
+          
+          // Handle cases where user types without spaces (e.g., "boxcarracer")
+          if (!isCorrect && guessWords.length === 1 && actualWords.length > 1) {
+            const concatenatedActual = actualWords.join('');
+            const concatenatedGuess = guessWords.join('');
+            isCorrect = concatenatedActual === concatenatedGuess;
+          }
+          
+          // For partial matches, require that the guess contains at least 90% of the artist words
+          // and that the missing words are not significant (e.g., "the", "a", "an")
+          if (!isCorrect && guessWords.length < actualWords.length) {
+            const significantWords = actualWords.filter(word => word.length > 2); // Filter out short words like "the", "a", etc.
+            const matchingSignificantWords = significantWords.filter(actualWord =>
+              guessWords.some(guessWord => guessWord === actualWord)
+            );
+            
+            if (significantWords.length > 0) {
+              const significantMatchPercentage = matchingSignificantWords.length / significantWords.length;
+              isCorrect = significantMatchPercentage >= 0.9;
+            }
+          }
+        }
+        
+        return isCorrect;
       });
       
       if (correctArtist) {
@@ -1141,7 +1632,63 @@ io.on('connection', (socket) => {
       const normalizedActualTitle = normalizeTitle(gameState.currentSong.name);
       const normalizedGuess = normalizeTitle(title);
       
-      if (normalizedActualTitle.includes(normalizedGuess) || normalizedGuess.includes(normalizedActualTitle)) {
+      // Split into words for better comparison
+      const actualWords = normalizedActualTitle.split(/\s+/).filter(word => word.length > 0);
+      const guessWords = normalizedGuess.split(/\s+/).filter(word => word.length > 0);
+      
+      // Check if the guess is a good match
+      let isCorrect = false;
+      
+      if (actualWords.length > 0 && guessWords.length > 0) {
+        // Calculate how many words from the guess match words in the actual title
+        const matchingWords = guessWords.filter(guessWord => 
+          actualWords.some(actualWord => actualWord === guessWord)
+        );
+        
+        // Calculate match percentage
+        const matchPercentage = matchingWords.length / Math.max(actualWords.length, guessWords.length);
+        
+        // Require at least 80% match and at least 2 matching words (or all words if title is short)
+        const minWordsRequired = Math.min(2, actualWords.length);
+        isCorrect = matchPercentage >= 0.8 && matchingWords.length >= minWordsRequired;
+        
+        // Also allow exact matches (case-insensitive, ignoring spaces and special chars)
+        if (!isCorrect) {
+          const exactMatch = normalizedActualTitle === normalizedGuess;
+          isCorrect = exactMatch;
+        }
+        
+        // Allow partial matches only if the guess contains ALL of the title words
+        if (!isCorrect && guessWords.length >= actualWords.length * 0.7) {
+          const allActualWordsFound = actualWords.every(actualWord =>
+            guessWords.some(guessWord => guessWord === actualWord)
+          );
+          isCorrect = allActualWordsFound;
+        }
+        
+        // Handle cases where user types without spaces (e.g., "cantstopme")
+        if (!isCorrect && guessWords.length === 1 && actualWords.length > 1) {
+          const concatenatedActual = actualWords.join('');
+          const concatenatedGuess = guessWords.join('');
+          isCorrect = concatenatedActual === concatenatedGuess;
+        }
+        
+        // For partial matches, require that the guess contains at least 90% of the title words
+        // and that the missing words are not significant (e.g., "the", "a", "an")
+        if (!isCorrect && guessWords.length < actualWords.length) {
+          const significantWords = actualWords.filter(word => word.length > 2); // Filter out short words like "the", "a", etc.
+          const matchingSignificantWords = significantWords.filter(actualWord =>
+            guessWords.some(guessWord => guessWord === actualWord)
+          );
+          
+          if (significantWords.length > 0) {
+            const significantMatchPercentage = matchingSignificantWords.length / significantWords.length;
+            isCorrect = significantMatchPercentage >= 0.9;
+          }
+        }
+      }
+      
+      if (isCorrect) {
         gameState.guessedParts.title = true;
         gameState.scores[playerName]++;
         correctParts.push('title');
@@ -1277,6 +1824,10 @@ io.on('connection', (socket) => {
       console.log(`📊 Updated players:`, gameState.players);
       console.log(`📊 Scores remain persistent:`, gameState.scores);
     }
+    
+    // Clean up IP tracking
+    gameState.socketToIp.delete(socket.id);
+    console.log(`Socket ${socket.id} disconnected`);
   });
 });
 

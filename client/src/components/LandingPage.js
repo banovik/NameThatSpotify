@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
+import { useLogging } from '../contexts/LoggingContext';
 import leoProfanity from 'leo-profanity';
 
 // Utility to replace common leetspeak and symbol substitutions
@@ -25,12 +26,77 @@ function normalizeLeetSpeak(str) {
 const LandingPage = () => {
   const navigate = useNavigate();
   const { loginAdmin } = useAuth();
+  const { logError } = useLogging();
   const [playerName, setPlayerName] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
+  const [showAdminForm, setShowAdminForm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [adminError, setAdminError] = useState('');
+  // Game code state
+  const [gameCode, setGameCode] = useState('');
+  const [gameCodeVerified, setGameCodeVerified] = useState(false);
+  const [gameCodeError, setGameCodeError] = useState('');
 
-  const handleAdminLogin = async () => {
+  // Handle player name input with character limit
+  const handlePlayerNameChange = (e) => {
+    const value = e.target.value;
+    // Limit input to 32 characters
+    if (value.length <= 32) {
+      setPlayerName(value);
+    }
+  };
+
+  // Handle game code input
+  const handleGameCodeChange = (e) => {
+    const value = e.target.value;
+    // Limit to 8 digits
+    if (value.length <= 8 && /^\d*$/.test(value)) {
+      setGameCode(value);
+      setGameCodeError(''); // Clear error when user types
+    }
+  };
+
+  // Verify game code
+  const handleGameCodeSubmit = async (e) => {
+    e.preventDefault();
+    if (!gameCode.trim()) {
+      setGameCodeError('Please enter a game code');
+      return;
+    }
+    
+    setLoading(true);
+    setGameCodeError('');
+    
+    try {
+      const response = await axios.post('/api/verify-game-code', { gameCode: gameCode.trim() });
+      if (response.data.success) {
+        setGameCodeVerified(true);
+        setGameCodeError('');
+      }
+    } catch (error) {
+      logError('Game code verification error:', error);
+      if (error.response?.status === 429) {
+        setGameCodeError(error.response.data.error || 'Too many failed attempts. Please wait before trying again.');
+      } else if (error.response?.status === 403) {
+        setGameCodeError(error.response.data.error || 'Access denied. You are blocked from joining the game.');
+      } else {
+        setGameCodeError(error.response?.data?.error || 'Invalid game code');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Reset game code verification
+  const handleBackToGameCode = () => {
+    setGameCodeVerified(false);
+    setGameCode('');
+    setPlayerName('');
+    setGameCodeError('');
+  };
+
+  const handleAdminLogin = async (e) => {
+    e.preventDefault();
     if (!adminPassword.trim()) {
       setAdminError('Please enter the admin password');
       return;
@@ -41,20 +107,22 @@ const LandingPage = () => {
     
     try {
       // First verify admin password
-      const verifyResponse = await axios.post('/api/verify-admin', {
-        password: adminPassword
-      });
+      const response = await axios.post('/api/verify-admin', { password: adminPassword });
       
-      if (verifyResponse.data.success) {
+      if (response.data.success) {
         // Password is correct, set admin as authenticated
         loginAdmin();
         // Navigate directly to admin page
         navigate('/admin');
+      } else {
+        alert('Invalid admin password');
       }
     } catch (error) {
-      console.error('Error during admin login:', error);
+      logError('Error during admin login:', error);
       if (error.response?.status === 401) {
         setAdminError('Invalid admin password');
+      } else if (error.response?.status === 429) {
+        setAdminError(error.response.data.error || 'Too many failed attempts. Please wait before trying again.');
       } else {
         setAdminError('Failed to connect to server. Please try again.');
       }
@@ -66,7 +134,6 @@ const LandingPage = () => {
   const handlePlayerJoin = (e) => {
     e.preventDefault();
     const trimmedName = playerName.trim();
-    // Profanity/obfuscation check
     if (trimmedName) {
       leoProfanity.loadDictionary();
       const lowerName = trimmedName.toLowerCase();
@@ -75,7 +142,6 @@ const LandingPage = () => {
       const leetName = normalizeLeetSpeak(lowerName);
       const leetJoined = normalizeLeetSpeak(joinedName);
       const badWords = leoProfanity.list();
-      // Check if any bad word is a substring of the username (in any form)
       const containsBadWord = badWords.some(word =>
         lowerName.includes(word) ||
         cleanedName.includes(word) ||
@@ -91,12 +157,16 @@ const LandingPage = () => {
         leoProfanity.check(leetJoined) ||
         containsBadWord
       ) {
-        // eslint-disable-next-line no-console
-        console.error('Please choose a different username. Offensive or inappropriate words are not allowed.');
+        logError('Please choose a different username. Offensive or inappropriate words are not allowed.');
         alert('Please choose a different username. Offensive or inappropriate words are not allowed.');
         return;
       }
-      navigate('/player', { state: { playerName: trimmedName } });
+      navigate('/player', { 
+        state: { 
+          playerName: trimmedName,
+          gameCode: gameCode 
+        } 
+      });
     }
   };
 
@@ -123,7 +193,7 @@ const LandingPage = () => {
               placeholder="Enter admin password"
               value={adminPassword}
               onChange={(e) => setAdminPassword(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleAdminLogin()}
+              onKeyPress={(e) => e.key === 'Enter' && handleAdminLogin(e)}
             />
             {adminError && (
               <p className="error-text text-center mb-10">{adminError}</p>
@@ -145,25 +215,60 @@ const LandingPage = () => {
             <p className="text-center mb-20">
               Enter your name and start guessing songs!
             </p>
-            <form onSubmit={handlePlayerJoin}>
+            <form onSubmit={handleGameCodeSubmit}>
               <input
                 type="text"
                 className="input"
-                placeholder="Enter your player name"
-                value={playerName}
-                onChange={(e) => setPlayerName(e.target.value)}
+                placeholder="Enter game code"
+                value={gameCode}
+                onChange={handleGameCodeChange}
+                maxLength={8}
                 required
               />
+              {gameCodeError && (
+                <p className="error-text text-center mb-10">{gameCodeError}</p>
+              )}
               <div className="flex-center">
                 <button 
                   type="submit" 
                   className="btn"
-                  disabled={!playerName.trim()}
+                  disabled={loading || !gameCode.trim()}
                 >
-                  Join Game
+                  {loading ? 'Verifying...' : 'Verify Game Code'}
                 </button>
               </div>
             </form>
+
+            {gameCodeVerified && (
+              <div className="flex-center mt-20">
+                <form onSubmit={handlePlayerJoin}>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Enter your player name"
+                    value={playerName}
+                    onChange={handlePlayerNameChange}
+                    maxLength={25}
+                    required
+                  />
+                  <div className="flex-center">
+                    <button 
+                      type="submit" 
+                      className="btn"
+                      disabled={!playerName.trim()}
+                    >
+                      Join Game
+                    </button>
+                  </div>
+                </form>
+                <button 
+                  className="btn ml-10" 
+                  onClick={handleBackToGameCode}
+                >
+                  Back to Game Code
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
