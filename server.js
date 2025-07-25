@@ -1613,6 +1613,15 @@ io.on('connection', (socket) => {
               isCorrect = significantMatchPercentage >= 0.9;
             }
           }
+          
+          // Handle cases where guess has fewer words but contains all significant words
+          // This handles cases like "boxcar racer" for "Box Car Racer"
+          if (!isCorrect && guessWords.length < actualWords.length) {
+            const allSignificantWordsFound = actualWords.every(actualWord =>
+              guessWords.some(guessWord => guessWord === actualWord)
+            );
+            isCorrect = allSignificantWordsFound;
+          }
         }
         
         return isCorrect;
@@ -1685,6 +1694,15 @@ io.on('connection', (socket) => {
             const significantMatchPercentage = matchingSignificantWords.length / significantWords.length;
             isCorrect = significantMatchPercentage >= 0.9;
           }
+        }
+        
+        // Handle cases where guess has fewer words but contains all significant words
+        // This handles cases like "cant stop me" for "Can't Stop Me"
+        if (!isCorrect && guessWords.length < actualWords.length) {
+          const allSignificantWordsFound = actualWords.every(actualWord =>
+            guessWords.some(guessWord => guessWord === actualWord)
+          );
+          isCorrect = allSignificantWordsFound;
         }
       }
       
